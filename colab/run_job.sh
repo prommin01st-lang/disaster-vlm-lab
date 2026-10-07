@@ -44,7 +44,7 @@ RC=124; FAILS=0
 DEADLINE=$(( $(date +%s) + TIMEOUT_MIN * 60 ))
 while :; do
   sleep 60
-  if STATUS=$(colab exec -s "$NAME" -f "$ROOT/colab/poll.py" --timeout 60); then FAILS=0
+  if STATUS=$(timeout 90 colab exec -s "$NAME" -f "$ROOT/colab/poll.py" --timeout 60); then FAILS=0
   else STATUS="__POLL_FAIL__"; FAILS=$((FAILS+1))
     [ "$FAILS" -eq 5 ] && echo "[run_job] WARN: 5 poll failures in a row" >&2
     if [ "$FAILS" -ge 15 ]; then echo "[run_job] too many poll failures" >&2; RC=126; break; fi

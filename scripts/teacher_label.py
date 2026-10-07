@@ -1,5 +1,5 @@
 """Qwen3.5-9B เลือก incident_type (ภายใน candidates) + severity ให้ภาพที่ label ยังไม่ตายตัว"""
-import json, os, random, sys, tarfile, time
+import json, os, random, shutil, sys, tarfile, time
 from collections import Counter
 from pathlib import Path
 
@@ -97,6 +97,7 @@ print(f"teacher_calls {n_teacher} total {el:.0f}s = {el / max(1, n_teacher):.2f}
 with open(base / "labeled.jsonl", "w", encoding="utf-8") as f:
     for r in out:
         f.write(json.dumps(r, ensure_ascii=False) + "\n")
+shutil.copy(base / "labeled.jsonl", "out/labeled.jsonl")  # ส่งกลับเครื่อง (ต้นฉบับของ split)
 tl = [r for r in out if r["label_source"] == "teacher"]
 print("labeled", len(out), "dropped", dropped, "teacher_rows", len(tl),
       "unsure", sum(r["incident_type"] == "unsure" for r in tl))

@@ -1,5 +1,5 @@
 """dedupe ภาพเกือบซ้ำ → split แบบไม่รั่ว → balance เฉพาะ train → dataset_v1.tar ขึ้น HF"""
-import json, os, tarfile
+import json, os, shutil, tarfile
 from collections import Counter
 from pathlib import Path
 
@@ -47,5 +47,5 @@ api.upload_file(path_or_fileobj="data/dataset_v1.tar", path_in_repo="dataset_v1.
                 repo_id=repo, repo_type="dataset")
 os.makedirs("out", exist_ok=True)
 for name in by:  # ส่ง jsonl กลับเครื่องไว้ดู/ทำ review sheet
-    os.system(f"cp {out}/{name}.jsonl out/")
+    shutil.copy(out / f"{name}.jsonl", "out/")
 print("uploaded dataset_v1.tar")

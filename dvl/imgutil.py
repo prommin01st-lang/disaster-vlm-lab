@@ -19,7 +19,7 @@ def to_rgb_resized(img: Image.Image, max_side: int = 512) -> Image.Image:
 
 def ahash(img: Image.Image) -> int:
     small = img.convert("L").resize((8, 8), Image.BILINEAR)
-    px = list(small.getdata())
+    px = list(small.tobytes())
     avg = sum(px) / 64
     return sum(1 << i for i, p in enumerate(px) if p > avg)
 

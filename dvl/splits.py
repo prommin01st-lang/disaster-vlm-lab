@@ -1,11 +1,16 @@
 import random
 from collections import defaultdict
 
-from dvl.imgutil import hamming
+import numpy as np
 
 
 def group_near_duplicates(hashes: list[int], max_dist: int = 4) -> list[int]:
-    """union-find แบบ O(n^2) ผ่าน bucket 16 บิตแรก 4 ชุด (LSH แบบง่าย) — ภาพซ้ำ/เกือบซ้ำได้ group เดียวกัน"""
+    """Exact all-pairs Hamming distance check with union-find. Groups hashes within max_dist
+    by computing exact Hamming distances in chunked rows; handles large inputs by processing
+    in chunks of 1024 to avoid memory blowup."""
+    if not hashes:
+        return []
+
     parent = list(range(len(hashes)))
 
     def find(i: int) -> int:
@@ -14,16 +19,36 @@ def group_near_duplicates(hashes: list[int], max_dist: int = 4) -> list[int]:
             i = parent[i]
         return i
 
-    for band in range(4):
-        buckets: dict[int, list[int]] = defaultdict(list)
-        for i, h in enumerate(hashes):
-            buckets[(h >> (16 * band)) & 0xFFFF].append(i)
-        for idx in buckets.values():
-            for a in range(len(idx)):
-                for b in range(a + 1, len(idx)):
-                    i, j = idx[a], idx[b]
-                    if hamming(hashes[i], hashes[j]) <= max_dist:
-                        parent[find(i)] = find(j)
+    h = np.array(hashes, dtype=np.uint64)
+    n = len(hashes)
+    chunk_size = 1024
+
+    # Check within-chunk pairs first
+    for i_start in range(0, n, chunk_size):
+        i_end = min(i_start + chunk_size, n)
+        for i in range(i_start, i_end):
+            for j in range(i + 1, i_end):
+                d = (h[i] ^ h[j]).bit_count()
+                if d <= max_dist:
+                    pi, pj = find(i), find(j)
+                    if pi != pj:
+                        parent[pi] = pj
+
+    # Check cross-chunk pairs (i in chunk vs j after chunk)
+    for i_start in range(0, n, chunk_size):
+        i_end = min(i_start + chunk_size, n)
+        chunk = h[i_start:i_end]
+        if i_end < n:
+            dists = np.bitwise_count(chunk[:, None] ^ h[i_end:])
+            for chunk_i, dists_row in enumerate(dists):
+                i = i_start + chunk_i
+                for j_offset, d in enumerate(dists_row):
+                    j = i_end + j_offset
+                    if d <= max_dist:
+                        pi, pj = find(i), find(j)
+                        if pi != pj:
+                            parent[pi] = pj
+
     return [find(i) for i in range(len(hashes))]
 
 

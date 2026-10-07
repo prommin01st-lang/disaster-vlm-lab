@@ -20,11 +20,11 @@ def load_model(model_id: str, adapter: str | None = None):
 def generate_json(model, processor, messages: list[dict]) -> tuple[str, float | None]:
     inputs = processor.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=True,
-        return_dict=True, return_tensors="pt").to(model.device)
+        return_dict=True, return_tensors="pt", enable_thinking=False).to(model.device)
     out = model.generate(**inputs, max_new_tokens=64, do_sample=False,
-                         output_scores=True, return_dict_in_generate=True)
+                         output_logits=True, return_dict_in_generate=True)
     new_ids = out.sequences[0, inputs["input_ids"].shape[1]:]
-    probs = [torch.softmax(s[0].float(), -1)[t].item() for s, t in zip(out.scores, new_ids)]
+    probs = [torch.softmax(s[0].float(), -1)[t].item() for s, t in zip(out.logits, new_ids)]
     tok = processor.tokenizer
     pieces = [tok.decode([t], skip_special_tokens=False) for t in new_ids]
     keep = [i for i, t in enumerate(new_ids) if t not in tok.all_special_ids]

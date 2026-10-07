@@ -57,7 +57,16 @@ def cmmd_image(r):
     if r["image"] is not None:
         return r["image"]
     p = CMMD_DIR / r["image_path"]
-    return PILImage.open(p) if p.exists() else None
+    if not p.exists():
+        print("skip missing crisismmd image:", r["image_id"], r["image_path"])
+        return None
+    try:
+        im = PILImage.open(p)
+        im.load()
+        return im
+    except Exception as e:
+        print("skip corrupt crisismmd image:", r["image_id"], e)
+        return None
 
 
 damage = {}

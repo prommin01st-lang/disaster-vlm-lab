@@ -1,6 +1,6 @@
 """สร้างชีตให้คนตรวจ label ของ test (สุ่มไม่เกิน 25 ภาพ/คลาส) แล้ว apply กลับเป็น test_gold.jsonl
 ใช้:  python scripts/review_sheet.py make   |   python scripts/review_sheet.py apply"""
-import csv, html, json, random, sys, tarfile
+import csv, html, json, os, random, sys, tarfile
 from collections import defaultdict
 from pathlib import Path
 
@@ -10,6 +10,8 @@ from dvl.catalog import ALLOWED_TYPES, category_of
 from dvl.schema import target_json
 
 D = Path("data/dataset_v1"); R = Path("data/review"); R.mkdir(parents=True, exist_ok=True)
+REVIEW_CSV = Path(os.environ.get("REVIEW_CSV", "data/review/review.csv"))
+GOLD_OUT = Path(os.environ.get("GOLD_OUT", "data/dataset_v1/test_gold.jsonl"))
 
 
 def make():
@@ -50,7 +52,7 @@ def make():
     print(f"Picked rows by label_source: {dict(by_source)}")
 
     # Write CSV
-    with open(R / "review.csv", "w", newline="", encoding="utf-8") as f:
+    with open(REVIEW_CSV, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f); w.writerow(["id", "incident_type", "severity", "keep"])
         for r in pick:
             w.writerow([r["id"], r["incident_type"], r["severity"], "1"])
@@ -91,6 +93,7 @@ def apply():
     # Load test set keyed by id
     rows = {json.loads(l)["id"]: json.loads(l) for l in open(D / "test.jsonl", encoding="utf-8")}
     out, bad = [], []
+    seen_ids = set()
 
     # Track disagreements
     disagree_stats = {
@@ -98,12 +101,30 @@ def apply():
         "by_source": defaultdict(lambda: {"total": 0, "changed_type": 0, "changed_severity": 0, "discarded": 0})
     }
 
-    for c in csv.DictReader(open(R / "review.csv", encoding="utf-8")):
-        original_id = c["id"]
-        original_row = rows[original_id]
+    for c in csv.DictReader(open(REVIEW_CSV, encoding="utf-8")):
+        row_id = c["id"].strip()
+
+        # Check for unknown id
+        if row_id not in rows:
+            bad.append((row_id, "unknown id"))
+            continue
+
+        # Check for duplicate id
+        if row_id in seen_ids:
+            bad.append((row_id, "duplicate id"))
+            continue
+        seen_ids.add(row_id)
+
+        original_row = rows[row_id]
         original_source = original_row["label_source"]
 
-        if c["keep"].strip() != "1":
+        # Validate keep value
+        keep_val = c["keep"].strip()
+        if keep_val not in ("0", "1"):
+            bad.append((row_id, "keep must be 0/1"))
+            continue
+
+        if keep_val == "0":
             # Discarded row
             disagree_stats["by_source"][original_source]["total"] += 1
             disagree_stats["by_source"][original_source]["discarded"] += 1
@@ -114,19 +135,17 @@ def apply():
         try:
             tgt = target_json(t, s)
         except (KeyError, ValueError) as e:
-            bad.append((c["id"], str(e))); continue
-
-        r = rows[c["id"]]
+            bad.append((row_id, str(e))); continue
 
         # Track changes
         disagree_stats["by_source"][original_source]["total"] += 1
-        if t != r["incident_type"]:
+        if t != original_row["incident_type"]:
             disagree_stats["by_source"][original_source]["changed_type"] += 1
-        if s != r["severity"]:
+        if s != original_row["severity"]:
             disagree_stats["by_source"][original_source]["changed_severity"] += 1
         disagree_stats["total"] += 1
 
-        out.append({**r, "incident_type": t, "category": category_of(t), "severity": s,
+        out.append({**original_row, "incident_type": t, "category": category_of(t), "severity": s,
                     "target": tgt, "label_source": "human"})
 
     if bad:
@@ -141,10 +160,13 @@ def apply():
             changed_type = stats["changed_type"]
             changed_severity = stats["changed_severity"]
             discarded = stats["discarded"]
+            ct_pct = round(100 * changed_type / total, 1)
+            cs_pct = round(100 * changed_severity / total, 1)
+            d_pct = round(100 * discarded / total, 1)
             print(f"\n{source} ({total} rows):")
-            print(f"  changed_type: {changed_type} ({100*changed_type//total if total else 0}%)")
-            print(f"  changed_severity: {changed_severity} ({100*changed_severity//total if total else 0}%)")
-            print(f"  discarded: {discarded} ({100*discarded//total if total else 0}%)")
+            print(f"  changed_type: {changed_type} ({ct_pct}%)")
+            print(f"  changed_severity: {changed_severity} ({cs_pct}%)")
+            print(f"  discarded: {discarded} ({d_pct}%)")
 
     # Write to JSON file
     stats_summary = {}
@@ -165,7 +187,7 @@ def apply():
     print(f"\nStats saved to {R/'review_stats.json'}")
 
     # Write test_gold.jsonl
-    with open(D / "test_gold.jsonl", "w", encoding="utf-8") as f:
+    with open(GOLD_OUT, "w", encoding="utf-8") as f:
         for r in out:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
     print(f"test_gold: {len(out)} rows")

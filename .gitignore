@@ -1,0 +1,7 @@
+data/
+runs/
+*.tar
+*.tar.gz
+__pycache__/
+.pytest_cache/
+.superpowers/

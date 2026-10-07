@@ -1,0 +1,7 @@
+transformers==5.13.1
+peft==0.19.1
+trl==1.8.0
+datasets>=4.0
+accelerate
+huggingface_hub
+pillow

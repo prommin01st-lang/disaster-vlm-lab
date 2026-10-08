@@ -1,0 +1,114 @@
+{
+  "n": 3244,
+  "json_valid_rate": 1.0,
+  "type_accuracy": 0.8788532675709001,
+  "type_macro_f1": 0.6070432225858667,
+  "category_accuracy": 0.8927250308261405,
+  "severity_accuracy": 0.8708384710234278,
+  "false_alarm_rate": 0.11706102117061021,
+  "miss_rate": 0.025149700598802394,
+  "unsure_rate": 0.0006165228113440197,
+  "ece": 0.1051,
+  "per_type": {
+    "building_collapse": {
+      "precision": 0.8125,
+      "recall": 0.4482758620689655,
+      "f1": 0.5777777777777777,
+      "support": 29
+    },
+    "building_fire": {
+      "precision": 0.5789473684210527,
+      "recall": 0.6875,
+      "f1": 0.6285714285714286,
+      "support": 16
+    },
+    "damaged_structure": {
+      "precision": 0.6383928571428571,
+      "recall": 0.8511904761904762,
+      "f1": 0.7295918367346937,
+      "support": 168
+    },
+    "flood": {
+      "precision": 0.6687898089171974,
+      "recall": 0.8898305084745762,
+      "f1": 0.7636363636363636,
+      "support": 118
+    },
+    "forest_fire": {
+      "precision": 0.8290155440414507,
+      "recall": 0.9815950920245399,
+      "f1": 0.898876404494382,
+      "support": 163
+    },
+    "landslide": {
+      "precision": 0.375,
+      "recall": 0.6,
+      "f1": 0.4615384615384615,
+      "support": 5
+    },
+    "no_incident": {
+      "precision": 0.9902143522833178,
+      "recall": 0.8821087588210876,
+      "f1": 0.9330406147091109,
+      "support": 2409
+    },
+    "road_hazard": {
+      "precision": 0.6,
+      "recall": 0.782608695652174,
+      "f1": 0.6792452830188679,
+      "support": 69
+    },
+    "smoke_detected": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 4
+    },
+    "storm": {
+      "precision": 0.525,
+      "recall": 0.8811188811188811,
+      "f1": 0.6579634464751959,
+      "support": 143
+    },
+    "unsure": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 2
+    },
+    "vehicle_collision": {
+      "precision": 0.8636363636363636,
+      "recall": 0.9693877551020408,
+      "f1": 0.9134615384615384,
+      "support": 98
+    },
+    "vehicle_fire": {
+      "precision": 1.0,
+      "recall": 0.5,
+      "f1": 0.6666666666666666,
+      "support": 2
+    },
+    "water_rescue": {
+      "precision": 0.45454545454545453,
+      "recall": 0.8333333333333334,
+      "f1": 0.5882352941176471,
+      "support": 18
+    }
+  },
+  "by_label_source": {
+    "fixed": {
+      "n": 2297,
+      "type_macro_f1": 0.7036713969670123,
+      "type_accuracy": 0.8846321288637353,
+      "false_alarm_rate": 0.12604217753800884,
+      "miss_rate": 0.011627906976744186
+    },
+    "teacher": {
+      "n": 947,
+      "type_macro_f1": 0.6759383042421858,
+      "type_accuracy": 0.8648363252375924,
+      "false_alarm_rate": 0.06756756756756757,
+      "miss_rate": 0.03119584055459272
+    }
+  }
+}

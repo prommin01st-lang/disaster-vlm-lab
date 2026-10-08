@@ -98,3 +98,48 @@ Per label_source (test):
 | teacher | miss_rate | 0.009 |
 
 Reading: macro-F1 is low (0.32 on test) because rare classes score near 0 and `damaged_structure` is almost never predicted correctly; the base model over-alarms on `no_incident` images (false alarm 0.48 on test) while rarely missing real incidents. JSON validity is already ~100%, so fine-tuning has to win on label semantics, not format.
+
+## Run locally (GGUF)
+
+The LoRA adapter merged into Qwen3.5-2B, converted with llama.cpp b10909 (`a2878d30d`), is in the private HF repo
+`Petanque/dvl-qwen3.5-2b-gguf`: `dvl-qwen3.5-2b-Q8_0.gguf` (1.87 GiB), `dvl-qwen3.5-2b-Q4_K_M.gguf` (1.19 GiB) and
+`mmproj-dvl-qwen3.5-2b-F16.gguf` (0.62 GiB, needed for images). The export runs on a Colab CPU runtime:
+`HF_TOKEN=$(cat ~/.cache/huggingface/token) colab/run_job.sh colab/jobs/gguf.sh CPU 120` (`scripts/export_gguf.py`).
+
+```bash
+# 1) download into models/gguf/ (gitignored)
+../iron-coach-th/.venv/bin/python -c "from huggingface_hub import snapshot_download; \
+  snapshot_download('Petanque/dvl-qwen3.5-2b-gguf', local_dir='models/gguf')"
+
+# 2) start the server (Vulkan build; port 8080 is often taken, so use 8091)
+LL="../olmocr-lab/bin/llama-b10909"
+LD_LIBRARY_PATH="$LL" "$LL/llama-server" -m models/gguf/dvl-qwen3.5-2b-Q8_0.gguf \
+  --mmproj models/gguf/mmproj-dvl-qwen3.5-2b-F16.gguf -ngl 99 -c 4096 -np 1 \
+  --jinja --reasoning off --host 127.0.0.1 --port 8091
+
+# 3) in another shell: predict the gold set, then score it
+PYTHONPATH=. ../iron-coach-th/.venv/bin/python scripts/predict_gguf.py --tag gguf_q8 --url http://127.0.0.1:8091
+PYTHONPATH=. ../iron-coach-th/.venv/bin/python scripts/evaluate.py --name gold \
+  data/dataset_v1/test_gold.jsonl runs/gguf/predictions-gguf_q8.jsonl
+```
+
+`predict_gguf.py` sends the same messages as `dvl/prompt.py` (system prompt, then image, then instruction) with
+`temperature 0`, `max_tokens 64`, `enable_thinking: false` and `logprobs`. Confidence uses `dvl/confidence.py` on the
+server's pre-sampling token probabilities. The script fails if any answer contains thinking output.
+
+Gold set (247), RTX 2060 6GB, Vulkan. VRAM is the whole card from nvidia-smi (the desktop uses about 350 MiB):
+
+| metric | base (bf16, HF) | gguf_q8 | gguf_q4 |
+|---|---|---|---|
+| json_valid_rate | 1.000 | 1.000 | 1.000 |
+| type_macro_f1 | 0.525 | 0.690 | 0.689 |
+| type_accuracy | 0.656 | 0.798 | 0.798 |
+| false_alarm_rate | 0.400 | 0.120 | 0.080 |
+| miss_rate | 0.018 | 0.041 | 0.045 |
+| ece | 0.246 | 0.160 | 0.158 |
+| s/img | 2.01 (L4) | 0.58 | 0.46 |
+| VRAM peak (MiB) | – | 3294 | 2543 |
+
+Reports: `reports/gguf_q8-gold.json`, `reports/gguf_q4-gold.json`. Q4_K_M scores the same as Q8_0 within noise on
+this small set (per-class differences are 1–2 images), so it is a reasonable default on a 6GB card. The bf16 LoRA
+reference on the same set (`lora_v1`) is needed to measure quantization loss directly.

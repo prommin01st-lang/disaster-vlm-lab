@@ -34,7 +34,7 @@ if [ -n "${HF_TOKEN:-}" ]; then   # token ผ่านไฟล์ (mode 600) �
 fi
 colab exec -s "$NAME" -f "$ROOT/colab/bootstrap.py" --timeout 900
 ENV_ARGS=(--env "JOB=$JOB")
-for v in LIMIT TEACHER_MAX TEACHER MODEL ADAPTER TAG MAX_STEPS EPOCHS LR; do
+for v in LIMIT TEACHER_MAX TEACHER MODEL ADAPTER TAG SPLIT MAX_STEPS EPOCHS LR; do
   [ -n "${!v:-}" ] && ENV_ARGS+=(--env "$v=${!v}")
 done
 colab exec -s "$NAME" -f "$ROOT/colab/launch.py" "${ENV_ARGS[@]}"

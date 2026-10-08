@@ -2,7 +2,7 @@
 ใช้: python scripts/predict_gguf.py --tag gguf_q8 [--url http://127.0.0.1:8080] [--split gold|test] [--limit N]
 ต้องเปิด llama-server ก่อน (ดู README "Run locally (GGUF)") · ข้อความ = dvl.prompt.build_messages แปลงเป็นรูป OpenAI
 confidence = span_confidence จาก logprobs ของ server (softmax ของ logits ก่อน sampling) เหมือน dvl/confidence.py"""
-import argparse, base64, json, math, mimetypes, subprocess, sys, threading, time, urllib.request
+import argparse, base64, json, math, mimetypes, re, subprocess, sys, threading, time, urllib.request
 from pathlib import Path
 
 from dvl.confidence import span_confidence
@@ -30,8 +30,20 @@ def to_openai(messages: list[dict]) -> list[dict]:
 
 
 def request_body(messages: list[dict]) -> dict:
-    return {"messages": to_openai(messages), "temperature": 0, "max_tokens": 64, "logprobs": True,
+    return {"messages": to_openai(messages), "temperature": 0, "max_tokens": 64, "logprobs": True, "top_logprobs": 5,
             "chat_template_kwargs": {"enable_thinking": False}}
+
+
+def value_alternatives(lp: list[dict], key: str) -> list[list]:
+    """top_logprobs ของ token แรกของค่า <key> → [[token, logprob], ...]
+    category มาก่อน incident_type และเป็น null เมื่อไม่ใช่เหตุ → จุดตัดสิน "เหตุ/ไม่ใช่เหตุ" อยู่ที่ token นี้"""
+    m = re.search(rf'"{key}"\s*:\s*"?', "".join(t["token"] for t in lp))
+    pos = 0
+    for t in lp if m else []:
+        if pos >= m.end():
+            return [[a["token"], a["logprob"]] for a in t.get("top_logprobs") or []]
+        pos += len(t["token"])
+    return []
 
 
 def parse_response(resp: dict) -> tuple[str, float | None, bool]:
@@ -75,11 +87,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", required=True)
     ap.add_argument("--url", default="http://127.0.0.1:8080")
-    ap.add_argument("--split", default="gold", choices=["gold", "test"])
+    ap.add_argument("--split", default="gold", choices=["gold", "test", "val"])
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--out", default="runs/gguf")
     a = ap.parse_args()
-    rows = [json.loads(l) for l in open(D / ("test_gold.jsonl" if a.split == "gold" else "test.jsonl"),
+    rows = [json.loads(l) for l in open(D / {"gold": "test_gold.jsonl", "test": "test.jsonl", "val": "val.jsonl"}[a.split],
                                         encoding="utf-8")]
     rows = rows[:a.limit] if a.limit else rows
     Path(a.out).mkdir(parents=True, exist_ok=True)
@@ -87,12 +99,17 @@ def main() -> None:
     t0, thinking, no_conf = time.time(), 0, 0
     with open(Path(a.out) / f"predictions-{a.tag}.jsonl", "w", encoding="utf-8") as f:
         for i, r in enumerate(rows):
-            text, conf, think = parse_response(post(a.url, request_body(build_messages(D / r["image"]))))
+            resp = post(a.url, request_body(build_messages(D / r["image"])))
+            text, conf, think = parse_response(resp)
+            lp = (resp["choices"][0].get("logprobs") or {}).get("content") or []
             thinking += think
             no_conf += conf is None
             p = parse_output(text)
             f.write(json.dumps({"id": r["id"], "raw": text, "valid": p.valid, "error": p.error,
-                                **to_api(p, conf if conf is not None else 0.0)}, ensure_ascii=False) + "\n")
+                                **to_api(p, conf if conf is not None else 0.0), "conf_raw": conf,
+                                "category_alts": value_alternatives(lp, "category"),
+                                "type_alts": value_alternatives(lp, "incident_type")},
+                               ensure_ascii=False) + "\n")
             f.flush()
             if i % 50 == 0:
                 print(i, len(rows), f"{(time.time() - t0) / (i + 1):.2f}s/img", text[:120], flush=True)

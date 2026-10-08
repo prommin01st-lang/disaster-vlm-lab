@@ -245,6 +245,24 @@ reference on the same set (`lora_v1`) is needed to measure quantization loss dir
 · ทางแก้ที่น่าลองใน v2: ถ่วงน้ำหนัก/ลด `no_incident` ในชุดเทรน หรือเลือก checkpoint ด้วย miss-rate แทน eval_loss
 (val เป็น no_incident 74% ทำให้ eval_loss เอียงไปทาง no_incident) หรือใช้ threshold confidence ให้ no_incident ต้องมั่นใจสูงก่อนตัดสิน
 
+### กติกาตอนใช้งาน: no_incident ที่ไม่มั่นใจ → `unsure` (ส่งให้คนดู) — GGUF Q4_K_M
+
+ไม่ต้องเทรนใหม่: ถ้าโมเดลตอบ `no_incident` แต่ **P(เป็นเหตุ) = 1 − P(category = null) ≥ T** ให้เปลี่ยนเป็น `unsure`
+(category มาก่อน incident_type ใน JSON จึงเป็น token ที่โมเดลตัดสินว่าเหตุ/ไม่ใช่เหตุ — confidence ของ incident_type อิ่มที่ 1.0 ใช้แยกไม่ได้)
+`scripts/predict_gguf.py` เก็บ `category_alts`/`type_alts` (top-5 logprobs) · `scripts/abstain_sweep.py` เลือก T บน **val** แล้ววัดบนชุดอื่น
+เลือก **T = 3.2e-5** (T ใหญ่สุดที่ val miss ≤ 1%) — ผลเต็มใน `reports/abstain-q4.md`
+
+| ชุด (Q4_K_M) | กติกา | macro-F1 | false_alarm | miss | ส่งให้คนดู (unsure) |
+|---|---|---|---|---|---|
+| val 1082 (ใช้เลือก T) | ปิด → เปิด | 0.674 → 0.671 | 0.142 → 0.142 | 0.024 → **0.003** | 0% → 9.7% |
+| gold 247 | ปิด → เปิด | 0.684 → 0.697 | 0.080 → 0.080 | 0.045 → **0.018** | 0% → 5.3% |
+| test ไม่รวม gold 2997 | ปิด → เปิด | 0.724 → 0.715 | 0.130 → 0.130 | 0.031 → **0.003** | 0.1% → 10.4% |
+
+เทียบเกณฑ์กับ base: miss ไม่สูงกว่า base แล้ว (gold 0.018 = 0.018, test 0.003 < 0.007) และ false alarm ยังต่ำกว่า base 3–6 เท่า
+ราคา: ~10% ของภาพถูกส่งให้คนดู — บน test 310 ภาพ เป็นเหตุจริง 17 (storm 7, road_hazard 4, …) ที่เหลือ 293 ไม่ใช่เหตุ
+ข้อจำกัด: T ผูกกับไฟล์ Q4_K_M + llama.cpp b10909 (Q8_0/bf16 ต้อง sweep ใหม่) · ค่า T เล็กมาก (ระดับ 1e-5) เพราะโมเดลมั่นใจเกินจริง
+· logprob มาจาก top-5 เท่านั้น — ถ้า `null` หลุด top-5 จะนับเป็นเหตุ (ปลอดภัย = ส่งให้คนดู)
+
 **อัตรา teacher label ผิด (Task 10):** ผู้ใช้ตรวจ 247 ภาพ ไม่แก้เลย 0/176 (teacher) และ 0/71 (fixed) — เป็นการยอมรับ ไม่ใช่หลักฐานว่า teacher ไม่ผิด
 
 **CU ที่ใช้ (Task 12):** เทรนรวม smoke ≈ 5.8 CU, predict lora_v1 ≈ 2.7 CU (รวมรอบที่ connection หลุดตอน bootstrap ~0.4 CU) — L4 ≈ 1.54 CU/ชม.

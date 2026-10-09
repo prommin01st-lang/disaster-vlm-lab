@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ลองจำแนกภาพแจ้งเหตุ</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%2214%22 fill=%22%23b3261e%22/%3E%3Crect x=%2214%22 y=%227%22 width=%224%22 height=%2212%22 rx=%222%22 fill=%22white%22/%3E%3Ccircle cx=%2216%22 cy=%2224%22 r=%222.4%22 fill=%22white%22/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e3e1db;
+    --accent: #1f5f8b; --accent-ink: #ffffff;
+    --alert: #b3261e; --alert-bg: #fbe9e7;
+    --ok: #2e6b3a; --ok-bg: #e7f3e8;
+    --warn: #8a5a00; --warn-bg: #fff3d6;
+    --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514; --panel: #1f1f1d; --ink: #ecebe7; --muted: #a09f9a; --line: #34332f;
+      --accent: #6aa9d6; --accent-ink: #0d1b26;
+      --alert: #ff8a80; --alert-bg: #3a1d1b; --ok: #8fd19e; --ok-bg: #1b2e1f; --warn: #ffcc66; --warn-bg: #352a12;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.55 "Noto Sans Thai", "Sarabun", "Leelawadee UI", system-ui, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    max-width: 1080px; margin: 0 auto; padding: 20px 16px 8px;
+  }
+  h1 { font-size: 1.3rem; margin: 0; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: .9rem; margin: 2px 0 0; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px;
+          border: 1px solid var(--line); background: var(--panel); font-size: .85rem; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: #3aa655; } .dot.bad { background: #d64a3b; }
+  main {
+    max-width: 1080px; margin: 0 auto; padding: 8px 16px 40px;
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px;
+  }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 16px; }
+  .drop {
+    position: relative; border: 2px dashed var(--line); border-radius: 12px; min-height: 300px;
+    display: grid; place-items: center; text-align: center; cursor: pointer; overflow: hidden;
+    transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); }
+  .drop:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .drop img { max-width: 100%; max-height: 420px; display: block; border-radius: 8px; }
+  .drop .hint { color: var(--muted); padding: 24px; }
+  .drop .hint strong { color: var(--ink); display: block; font-size: 1.05rem; margin-bottom: 4px; }
+  .row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  button {
+    font: inherit; border-radius: 10px; padding: 8px 14px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  .verdict { border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+  .verdict .k { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; opacity: .8; }
+  .verdict .v { font-size: 1.45rem; font-weight: 700; line-height: 1.3; }
+  .verdict .why { margin-top: 6px; font-size: .92rem; }
+  .verdict.alert { background: var(--alert-bg); color: var(--alert); }
+  .verdict.ok { background: var(--ok-bg); color: var(--ok); }
+  .verdict.warn { background: var(--warn-bg); color: var(--warn); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
+  dt { color: var(--muted); font-size: .9rem; }
+  dd { margin: 0; overflow-wrap: anywhere; }
+  code { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: .88em; }
+  .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 4px; max-width: 220px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  details { margin-top: 14px; }
+  summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; font-size: .82rem; }
+  .empty { color: var(--muted); text-align: center; padding: 48px 12px; }
+  .spinner { width: 28px; height: 28px; border: 3px solid var(--line); border-top-color: var(--accent);
+             border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto 10px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+  .err { color: var(--alert); }
+  .history { grid-column: 1 / -1; }
+  .history h2, .card h2 { font-size: 1rem; margin: 0 0 10px; }
+  .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; }
+  .thumb { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); cursor: pointer; padding: 0; text-align: left; }
+  .thumb img { width: 100%; height: 84px; object-fit: cover; display: block; }
+  .thumb span { display: block; font-size: .78rem; padding: 4px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tag-alert { color: var(--alert); } .tag-ok { color: var(--ok); } .tag-warn { color: var(--warn); }
+  input[type=password], input[type=text] {
+    font: inherit; width: 100%; max-width: 360px; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  footer { max-width: 1080px; margin: 0 auto; padding: 0 16px 32px; color: var(--muted); font-size: .85rem; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>ลองจำแนกภาพแจ้งเหตุ</h1>
+    <p class="sub">ส่งภาพ 1 ภาพ → โมเดลบอกประเภทเหตุตาม SOS catalog และบอกว่าควรให้เจ้าหน้าที่ดูหรือไม่</p>
+  </div>
+  <span class="pill" id="health" title="สถานะ llama-server"><span class="dot"></span><span>กำลังตรวจ…</span></span>
+</header>
+
+<main>
+  <section class="card" aria-labelledby="h-in">
+    <h2 id="h-in">ภาพ</h2>
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="เลือกภาพหรือวางภาพที่นี่">
+      <div class="hint" id="hint">
+        <strong>ลากภาพมาวาง · คลิกเพื่อเลือก · หรือกด Ctrl+V</strong>
+        JPEG / PNG / WebP ไม่เกิน 10 MB
+      </div>
+    </div>
+    <input type="file" id="file" accept="image/jpeg,image/png,image/webp" class="sr">
+    <div class="row">
+      <button class="primary" id="pick">เลือกภาพ</button>
+      <button id="again" disabled>วิเคราะห์ซ้ำ</button>
+    </div>
+    <details>
+      <summary>ตั้งค่า API key</summary>
+      <p class="sub">ใช้เมื่อเปิด API ด้วย <code>DVL_API_KEY</code> · เก็บไว้ในเบราว์เซอร์นี้เท่านั้น</p>
+      <label for="key" class="sr">API key</label>
+      <input type="password" id="key" autocomplete="off" placeholder="X-API-Key">
+    </details>
+  </section>
+
+  <section class="card" aria-labelledby="h-out" aria-live="polite">
+    <h2 id="h-out">ผลลัพธ์</h2>
+    <div id="out"><div class="empty">ยังไม่มีผล — เลือกภาพทางซ้ายเพื่อเริ่ม</div></div>
+  </section>
+
+  <section class="card history" aria-labelledby="h-hist" hidden id="histCard">
+    <h2 id="h-hist">ภาพที่ลองแล้ว</h2>
+    <div class="thumbs" id="thumbs"></div>
+  </section>
+</main>
+
+<footer>
+  โมเดลนี้เป็นผู้ช่วยคัดกรอง ไม่ได้ตัดสินแทนคน — ผล "ไม่ใช่เหตุ" ยังพลาดได้ (~0.3–2%) และยังไม่เคยทดสอบกับภาพจากประเทศไทย ·
+  ภาพที่ส่งถูกประมวลผลบนเครื่องนี้และไม่ได้ถูกเก็บ
+</footer>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const SEV = { none: "ไม่มี", mild: "เล็กน้อย", severe: "รุนแรง" };
+  const CAT = { fire_hazard: "ไฟไหม้และสารอันตราย", disaster: "ภัยพิบัติ", rescue: "กู้ภัย", accident: "อุบัติเหตุ", other: "อื่น ๆ / ไม่แน่ใจ" };
+  const REASON = {
+    uncertain_no_incident: "โมเดลคิดว่าไม่ใช่เหตุ แต่ยังไม่มั่นใจพอ — อาจเป็นเหตุจริง",
+    model_unsure: "โมเดลไม่แน่ใจว่าเป็นเหตุประเภทไหน",
+    invalid_output: "โมเดลตอบผิดรูปแบบ",
+  };
+  const ERR = {
+    unsupported_media_type: "ชนิดไฟล์ไม่รองรับ (ใช้ JPEG / PNG / WebP)",
+    too_large: "ไฟล์ใหญ่เกิน 10 MB", too_many_pixels: "ภาพมีขนาดพิกเซลใหญ่เกินไป",
+    undecodable_image: "เปิดไฟล์ภาพไม่ได้", missing_image: "ไม่ได้แนบภาพ",
+    unauthorized: "API key ไม่ถูกต้อง — ตั้งค่าในหัวข้อ \"ตั้งค่า API key\"",
+    llama_unreachable: "ติดต่อ llama-server ไม่ได้", llama_timeout: "llama-server ตอบช้าเกินกำหนด", llama_error: "llama-server ตอบผิดพลาด",
+  };
+  let names = {}, current = null, busy = false;
+  const history = [];
+
+  const store = {
+    get(k) { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
+    set(k, v) { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch {} },
+  };
+  $("key").value = store.get("dvl.apiKey");
+  $("key").addEventListener("change", (e) => { store.set("dvl.apiKey", e.target.value.trim()); loadLabels(); });
+  const headers = () => { const k = $("key").value.trim(); return k ? { "X-API-Key": k } : {}; };
+
+  function el(tag, attrs = {}, ...kids) {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) k === "class" ? (n.className = v) : n.setAttribute(k, v);
+    for (const c of kids) n.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    return n;
+  }
+
+  async function checkHealth() {
+    const pill = $("health"), dot = pill.querySelector(".dot"), txt = pill.lastElementChild;
+    try {
+      const r = await fetch("/health", { cache: "no-store" });
+      const j = await r.json();
+      dot.className = "dot " + (r.ok ? "ok" : "bad");
+      txt.textContent = r.ok ? `พร้อม · ${j.model || "model"}` : "โมเดลยังไม่พร้อม";
+    } catch { dot.className = "dot bad"; txt.textContent = "ติดต่อ API ไม่ได้"; }
+  }
+
+  async function loadLabels() {
+    try {
+      const r = await fetch("/v1/labels", { headers: headers() });
+      if (!r.ok) return;
+      for (const l of (await r.json()).labels) names[l.incident_type] = l.name_th;
+    } catch {}
+  }
+
+  function verdictOf(res) {
+    if (res.needs_review) return { cls: "warn", k: "ควรให้เจ้าหน้าที่ตรวจ", v: res.review_reason === "uncertain_no_incident" ? "อาจเป็นเหตุ — ไม่แน่ใจ" : (names[res.incident_type] || res.incident_type), why: REASON[res.review_reason] || "" };
+    if (res.incident_type === "no_incident") return { cls: "ok", k: "ผล", v: "ไม่ใช่เหตุ", why: "" };
+    return { cls: "alert", k: "พบเหตุ", v: res.incident_type_name_th || names[res.incident_type] || res.incident_type, why: "" };
+  }
+
+  function showLoading() {
+    $("out").replaceChildren(el("div", { class: "empty" }, el("div", { class: "spinner", "aria-hidden": "true" }), "กำลังวิเคราะห์… (ถ้ามีคนอื่นใช้อยู่จะต่อคิว)"));
+  }
+
+  function showError(msg) {
+    $("out").replaceChildren(el("div", { class: "empty err", role: "alert" }, msg));
+  }
+
+  function showResult(res) {
+    const v = verdictOf(res);
+    const box = el("div", { class: "verdict " + v.cls }, el("div", { class: "k" }, v.k), el("div", { class: "v" }, v.v));
+    if (v.why) box.append(el("div", { class: "why" }, v.why));
+
+    const conf = Math.max(0, Math.min(1, Number(res.confidence) || 0));
+    const bar = el("div", { class: "bar", "aria-hidden": "true" }, el("i"));
+    bar.firstChild.style.width = (conf * 100).toFixed(1) + "%";
+    const dl = el("dl");
+    const add = (k, ...v) => dl.append(el("dt", {}, k), el("dd", {}, ...v));
+    add("incident_type", el("code", {}, res.incident_type));
+    add("หมวด", res.category ? `${CAT[res.category] || res.category} (${res.category})` : "— (ไม่ใช่เหตุ)");
+    add("ความรุนแรงที่เห็น", SEV[res.severity] || res.severity);
+    if (res.model_incident_type && res.model_incident_type !== res.incident_type)
+      add("โมเดลตอบเดิม", el("code", {}, res.model_incident_type), " → ถูกส่งให้คนตรวจ");
+    const overridden = res.model_incident_type && res.model_incident_type !== res.incident_type;
+    add(overridden ? "confidence (ของคำตอบเดิม)" : "confidence", `${(conf * 100).toFixed(1)}%`, bar);
+    add("P(เป็นเหตุ)", el("code", {}, Number(res.p_incident).toExponential(1)), ` · เกณฑ์ ${Number(res.threshold).toExponential(1)}`);
+    add("เวลา", `${res.latency_ms} ms`);
+
+    const raw = el("details", {}, el("summary", {}, "JSON ทั้งหมด"), el("pre", {}, JSON.stringify(res, null, 2)));
+    $("out").replaceChildren(box, dl, raw);
+  }
+
+  function setPreview(url) {
+    $("drop").replaceChildren(el("img", { src: url, alt: "ภาพที่เลือก" }));
+  }
+
+  async function classify(file) {
+    if (busy) return;
+    busy = true; $("again").disabled = true; $("pick").disabled = true;
+    showLoading();
+    const fd = new FormData();
+    fd.append("image", file, file.name || "image");
+    try {
+      const r = await fetch("/v1/classify", { method: "POST", body: fd, headers: headers() });
+      let j = null;
+      try { j = await r.json(); } catch {}
+      if (!r.ok) { showError(ERR[j && j.error] || (j && j.message) || `ผิดพลาด (HTTP ${r.status})`); return; }
+      showResult(j);
+      addHistory(current.url, j);
+    } catch {
+      showError("ติดต่อ API ไม่ได้ — เปิด api/run.sh อยู่หรือไม่?");
+    } finally {
+      busy = false; $("again").disabled = !current; $("pick").disabled = false;
+    }
+  }
+
+  function addHistory(url, res) {
+    history.unshift({ url, res });
+    if (history.length > 12) URL.revokeObjectURL(history.pop().url);
+    $("histCard").hidden = false;
+    $("thumbs").replaceChildren(...history.map((h) => {
+      const hv = verdictOf(h.res);
+      const b = el("button", { class: "thumb", type: "button", title: hv.v },
+        el("img", { src: h.url, alt: "" }), el("span", { class: "tag-" + hv.cls }, hv.v));
+      b.addEventListener("click", () => { setPreview(h.url); showResult(h.res); });
+      return b;
+    }));
+  }
+
+  function take(file) {
+    if (!file) return;
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type)) { showError(ERR.unsupported_media_type); return; }
+    if (file.size > 10 * 1024 * 1024) { showError(ERR.too_large); return; }
+    current = { file, url: URL.createObjectURL(file) };
+    setPreview(current.url);
+    classify(file);
+  }
+
+  const drop = $("drop"), input = $("file");
+  const open = () => { if (!busy) input.click(); };
+  drop.addEventListener("click", open);
+  drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+  $("pick").addEventListener("click", open);
+  $("again").addEventListener("click", () => current && classify(current.file));
+  input.addEventListener("change", () => { take(input.files[0]); input.value = ""; });
+  ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => take(e.dataTransfer.files[0]));
+  document.addEventListener("paste", (e) => {
+    const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith("image/"));
+    if (item) take(item.getAsFile());
+  });
+
+  checkHealth(); loadLabels();
+  setInterval(checkHealth, 15000);
+})();
+</script>
+</body>
+</html>

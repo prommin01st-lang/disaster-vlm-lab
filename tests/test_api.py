@@ -342,3 +342,13 @@ def test_png_sent_lossless_and_model_answer_exposed():
 def test_decodes_are_bounded():
     import api.app as m
     assert m.DECODE_CONCURRENCY == 2
+
+
+def test_web_ui_served_without_key():
+    c = client(FakeLlama(), api_key="k")
+    r = c.get("/")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    assert "/v1/classify" in r.text
+    assert "default-src 'self'" in r.headers["content-security-policy"]
+    assert r.headers["x-content-type-options"] == "nosniff"

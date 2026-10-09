@@ -285,6 +285,11 @@ API บนเครื่องให้ระบบ SOS (ASP.NET Core) เร�
 ห่อ llama-server (GGUF **Q4_K_M** + mmproj) และใช้กติกา abstain ข้างบน (T = 3.2e-5) ทุกครั้ง — โค้ดอยู่ที่ `api/app.py`
 (client ของ llama.cpp + กติกา abstain อยู่ที่ `dvl/llamacpp.py` ใช้ร่วมกับ `scripts/predict_gguf.py` / `abstain_sweep.py`)
 
+**หน้าเว็บลองเล่น:** เปิด API แล้วเข้า **http://127.0.0.1:8092/** — ลาก/วาง/Ctrl+V ภาพ แล้วดูผล (ประเภทเหตุ, หมวด, ความรุนแรง,
+`needs_review` พร้อมเหตุผล, P(เป็นเหตุ) เทียบเกณฑ์, เวลา) และประวัติภาพที่ลองในหน้านั้น · ไฟล์เดียวที่ `api/web/index.html`
+เสิร์ฟจาก API เอง (origin เดียวกัน ไม่ต้องตั้ง CORS) · ถ้าตั้ง `DVL_API_KEY` ให้ใส่ key ในหัวข้อ "ตั้งค่า API key" ของหน้าเว็บ
+(เก็บใน localStorage ของเบราว์เซอร์) · ใช้กับ Docker ได้เหมือนกัน
+
 ### เปิดใช้งาน
 
 ```bash

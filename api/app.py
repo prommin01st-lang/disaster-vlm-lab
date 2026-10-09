@@ -4,12 +4,13 @@
 ขั้นตอน: ตรวจไฟล์ (≤10 MB, ≤40 MP) → to_rgb_resized(512) (เหมือนตอนสร้าง dataset) → PNG data URL (lossless) → dvl.prompt.build_messages
 → llama-server (ทีละคำขอ เพราะเปิด -np 1) → parse_output → กติกา abstain (no_incident ที่ P(เป็นเหตุ) >= T → unsure)"""
 import asyncio, hmac, io, json, os, time, warnings
+from pathlib import Path
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import httpx
 from fastapi import Depends, FastAPI, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
 
 from dvl.catalog import ALLOWED_TYPES
@@ -19,6 +20,7 @@ from dvl.llamacpp import abstain, gate_fires, p_incident, png_data_url, parse_re
 from dvl.prompt import build_messages
 from dvl.schema import parse_output, to_api
 
+WEB_UI = Path(__file__).with_name("web") / "index.html"
 MAX_BYTES = 10 * 1024 * 1024
 MAX_BODY = MAX_BYTES + 64 * 1024  # เผื่อ overhead ของ multipart
 MAX_PIXELS = 40_000_000  # กัน decompression bomb: PNG 1-bit ไม่กี่ร้อย byte ประกาศ 20000×20000 ได้
@@ -176,6 +178,15 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     def require_key(request: Request) -> None:
         if s.api_key and not hmac.compare_digest(request.headers.get("x-api-key", "").encode(), s.api_key.encode()):
             raise ApiError(401, "unauthorized", "missing or wrong X-API-Key")
+
+    @app.get("/", include_in_schema=False)
+    async def web_ui():
+        # หน้าเว็บลองเล่น (ไฟล์เดียว) — ไม่ต้องใช้ key เพราะ key ถูกส่งจากหน้าเว็บตอนเรียก /v1/*
+        return FileResponse(WEB_UI, media_type="text/html", headers={
+            "Content-Security-Policy": "default-src 'self'; img-src 'self' blob: data:; "
+                                       "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
+                                       "frame-ancestors 'none'",
+            "X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"})
 
     @app.get("/health")
     async def health():

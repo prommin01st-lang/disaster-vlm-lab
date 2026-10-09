@@ -1,0 +1,118 @@
+meta {
+  name: Classify No-Incident Image
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/v1/classify
+  body: multipartForm
+  auth: none
+}
+
+body:multipart-form {
+  image: @file(fixtures/no-incident.jpg)
+}
+
+tests {
+  test("Status is 200", function() {
+    expect(res.status).to.equal(200);
+  });
+
+  test("Street photo is no_incident with null category", function() {
+    expect(res.body.incident_type).to.equal("no_incident");
+    expect(res.body.model_incident_type).to.equal("no_incident");
+    expect(res.body.category).to.be.null;
+    expect(res.body.severity).to.equal("none");
+    expect(res.body.incident_type_name_th).to.equal("ไม่ใช่เหตุ");
+  });
+
+  test("Gate did not fire: p_incident below threshold, no review", function() {
+    expect(res.body.p_incident).to.be.below(res.body.threshold);
+    expect(res.body.needs_review).to.be.false;
+    expect(res.body.review_reason).to.be.null;
+    expect(res.body.valid).to.be.true;
+  });
+}
+
+example {
+  name: 200 OK - No Incident
+
+  request: {
+    url: {{baseUrl}}/v1/classify
+    method: post
+    mode: multipartForm
+    body:multipart-form: {
+      image: @file(fixtures/no-incident.jpg)
+    }
+  }
+
+  response: {
+    status: {
+      code: 200
+      text: OK
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "category": null,
+          "incident_type": "no_incident",
+          "model_incident_type": "no_incident",
+          "severity": "none",
+          "confidence": 1.0,
+          "p_incident": 4.82e-06,
+          "needs_review": false,
+          "review_reason": null,
+          "incident_type_name_th": "ไม่ใช่เหตุ",
+          "valid": true,
+          "model": "dvl-qwen3.5-2b-Q4_K_M",
+          "threshold": 3.2e-05,
+          "latency_ms": 322
+        }
+      '''
+    }
+  }
+}
+
+docs {
+  # Classify No-Incident Image
+
+  ## Overview
+  ภาพที่ไม่ใช่เหตุ (`fixtures/no-incident.jpg` — ถนนในเมือง มีคนเดิน) → `no_incident` ที่ `p_incident = 4.82e-06` ต่ำกว่า threshold 3.2e-05
+  → กติกา abstain **ไม่ทำงาน** · `needs_review=false` = เชื่อได้ว่าไม่ใช่เหตุ
+
+  - **ใช้ที่ / ใครเรียก / เมื่อไร:** เหมือน 01-Classify Incident Image (endpoint เดียวกัน)
+  - **ฝั่ง SOS:** `incident_type == "no_incident" && !needs_review` → ไม่ใช่เหตุ (ไม่ต้องสร้างเหตุ แต่ไม่ควรลบการแจ้งของประชาชนทิ้งอัตโนมัติ)
+
+  ## Request
+  ```
+  POST {{baseUrl}}/v1/classify
+  ```
+  multipart field `image` = `fixtures/no-incident.jpg` (`image/jpeg`) · header `X-API-Key` เมื่อตั้ง `DVL_API_KEY` — รายละเอียด field/validation ดู 01-Classify Incident Image
+
+  ## Response
+
+  ### 200 OK — ค่าเฉพาะของกรณีไม่ใช่เหตุ
+  | Field | Value | Description |
+  |-------|-------|-------------|
+  | `category` | `null` | `no_incident` ไม่มีหมวด |
+  | `incident_type` / `model_incident_type` | `no_incident` | เหมือนกัน = กติกาไม่ได้เปลี่ยนผล |
+  | `severity` | `none` | มีเฉพาะ `no_incident` |
+  | `p_incident` | `< threshold` | ถ้า ≥ threshold จะกลายเป็นกรณี 03-Classify Uncertain No-Incident |
+  | `needs_review` / `review_reason` | `false` / `null` | |
+
+  ตารางทุก field ดู 01-Classify Incident Image
+
+  ### Error Cases
+  เหมือน 01-Classify Incident Image (400/401/413/415/502/504)
+
+  ## Related Endpoints
+  - 03-Classify Uncertain No-Incident — โมเดลตอบ `no_incident` เหมือนกันแต่ไม่มั่นใจพอ → ส่งคนดู
+
+  ## Testing Notes
+  - fixture = test_gold `fb4fa14ff082ee2f` (label `no_incident`, CrisisMMD) — p_incident ห่าง threshold ~6.6 เท่า
+}

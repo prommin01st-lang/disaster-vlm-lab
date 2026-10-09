@@ -1,0 +1,243 @@
+meta {
+  name: Classify Incident Image
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/v1/classify
+  body: multipartForm
+  auth: none
+}
+
+body:multipart-form {
+  image: @file(fixtures/flood.jpg)
+}
+
+tests {
+  test("Status is 200", function() {
+    expect(res.status).to.equal(200);
+  });
+
+  test("Response has the fixed key set", function() {
+    expect(res.body).to.have.all.keys("category", "incident_type", "model_incident_type", "severity", "confidence",
+      "p_incident", "needs_review", "review_reason", "incident_type_name_th", "valid", "model", "threshold", "latency_ms");
+  });
+
+  test("Flood photo is classified as flood, no review needed", function() {
+    expect(res.body.incident_type).to.equal("flood");
+    expect(res.body.model_incident_type).to.equal("flood");
+    expect(res.body.category).to.equal("disaster");
+    expect(res.body.severity).to.be.oneOf(["mild", "severe"]);
+    expect(res.body.incident_type_name_th).to.equal("น้ำท่วม / น้ำป่าไหลหลาก");
+    expect(res.body.needs_review).to.be.false;
+    expect(res.body.review_reason).to.be.null;
+    expect(res.body.valid).to.be.true;
+  });
+
+  test("Numeric fields are in range", function() {
+    expect(res.body.confidence).to.be.within(0, 1);
+    expect(res.body.p_incident).to.be.within(0, 1);
+    expect(res.body.p_incident).to.be.at.least(res.body.threshold);
+    expect(res.body.threshold).to.be.a("number");
+    expect(res.body.latency_ms).to.be.a("number").and.at.least(0);
+  });
+}
+
+example {
+  name: 200 OK - Flood
+
+  request: {
+    url: {{baseUrl}}/v1/classify
+    method: post
+    mode: multipartForm
+    body:multipart-form: {
+      image: @file(fixtures/flood.jpg)
+    }
+  }
+
+  response: {
+    status: {
+      code: 200
+      text: OK
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "category": "disaster",
+          "incident_type": "flood",
+          "model_incident_type": "flood",
+          "severity": "severe",
+          "confidence": 1.0,
+          "p_incident": 1.0,
+          "needs_review": false,
+          "review_reason": null,
+          "incident_type_name_th": "น้ำท่วม / น้ำป่าไหลหลาก",
+          "valid": true,
+          "model": "dvl-qwen3.5-2b-Q4_K_M",
+          "threshold": 3.2e-05,
+          "latency_ms": 281
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 200 OK - Building Fire
+  description: แนบ fixtures/building-fire.jpg (กองไฟลุกไหม้โครงสร้างไม้)
+
+  request: {
+    url: {{baseUrl}}/v1/classify
+    method: post
+    mode: multipartForm
+    body:multipart-form: {
+      image: @file(fixtures/building-fire.jpg)
+    }
+  }
+
+  response: {
+    status: {
+      code: 200
+      text: OK
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "category": "fire_hazard",
+          "incident_type": "building_fire",
+          "model_incident_type": "building_fire",
+          "severity": "severe",
+          "confidence": 0.998,
+          "p_incident": 1.0,
+          "needs_review": false,
+          "review_reason": null,
+          "incident_type_name_th": "ไหม้อาคาร",
+          "valid": true,
+          "model": "dvl-qwen3.5-2b-Q4_K_M",
+          "threshold": 3.2e-05,
+          "latency_ms": 328
+        }
+      '''
+    }
+  }
+}
+
+docs {
+  # Classify Incident Image
+
+  ## Overview
+  ส่งภาพแจ้งเหตุ 1 ภาพ → ประเภทเหตุตาม SOS catalog (`category` / `incident_type` / `severity`) + ธง `needs_review`
+  กรณีนี้: ภาพน้ำท่วม (`fixtures/flood.jpg`) → `flood` ที่ `p_incident = 1.0` (มั่นใจว่าเป็นเหตุ) → ไม่ต้องให้คนดู
+
+  - **ใช้ที่:** SOS backend หลังประชาชนแนบภาพกับการแจ้งเหตุ — เสนอประเภทเหตุให้เจ้าหน้าที่ / จัดลำดับคิว
+  - **ใครเรียก:** SOS backend (ASP.NET Core `HttpClient` จาก `IHttpClientFactory`)
+  - **เมื่อไร:** 1 คำขอต่อ 1 ภาพ (หลายภาพ = หลายคำขอ — server เข้าคิวทีละคำขอ)
+  - **ไม่ใช่:** ตัวตัดสินสุดท้าย — `needs_review=true` ต้องให้เจ้าหน้าที่ยืนยัน · ไม่เก็บภาพ (ประมวลผลในหน่วยความจำแล้วทิ้ง)
+
+  ## Request
+
+  ### Method & Path
+  ```
+  POST {{baseUrl}}/v1/classify
+  ```
+
+  ### Headers
+  | Header | Value | Required |
+  |--------|-------|----------|
+  | Content-Type | multipart/form-data (Bruno ตั้งให้พร้อม boundary) | ✅ Yes |
+  | X-API-Key | `{{apiKey}}` (สคริปต์ collection ใส่ให้ถ้าตั้ง) | ✅ เมื่อตั้ง `DVL_API_KEY` · ❌ เมื่อไม่ตั้ง |
+
+  ### Request Body Fields
+  multipart/form-data
+  | Field | Type | Required | Validation | Description |
+  |-------|------|----------|------------|-------------|
+  | `image` | file | ✅ Yes | content type ของ part ต้องเป็น `image/jpeg` (`image/jpg`), `image/png` หรือ `image/webp` **และ** เนื้อไฟล์ต้องเป็น JPEG/PNG/WEBP จริง · ≤ 10 MB (10485760 byte) · ≤ 40 ล้าน pixel | ภาพ 1 ภาพ — field อื่นถูกเมิน |
+
+  ### Request Example
+  ```
+  POST {{baseUrl}}/v1/classify
+  Content-Type: multipart/form-data; boundary=----bruno
+
+  ------bruno
+  Content-Disposition: form-data; name="image"; filename="flood.jpg"
+  Content-Type: image/jpeg
+
+  <bytes ของ JPEG>
+  ------bruno--
+  ```
+
+  ```bash
+  curl -s -H "X-API-Key: $DVL_API_KEY" -F "image=@fixtures/flood.jpg" http://127.0.0.1:8092/v1/classify
+  ```
+
+  ### Validation Rules (ตามลำดับ)
+  1. body ทั้งคำขอ > 10 MB + 64 KB (จาก `Content-Length` หรือนับระหว่างอ่านสำหรับ chunked) → 413 `too_large` (middleware `BodyLimit` หยุดอ่านทันที)
+  2. ตั้ง `DVL_API_KEY` แต่ `X-API-Key` ไม่ตรง → 401
+  3. ไม่มี field `image` → 400 `missing_image`
+  4. content type ของ part ไม่ใช่ jpeg/png/webp → 415
+  5. ไฟล์ > 10 MB → 413 `too_large`
+  6. อ่าน header ภาพ: รูปแบบจริงไม่ใช่ JPEG/PNG/WEBP → 415 · w×h > 40,000,000 → 413 `too_many_pixels` (ก่อนถอด pixel) · ถอดไม่ได้ → 400 `undecodable_image`
+
+  ## Auth & Permission
+  - `X-API-Key` เมื่อตั้ง `DVL_API_KEY` (เทียบแบบ constant-time) · ไม่มีระบบสิทธิ์/ผู้ใช้
+  - PII: ภาพอาจมีใบหน้า/ทะเบียนรถ — API ไม่บันทึกภาพหรือ log เนื้อหา (log ของ uvicorn มีแค่ method/path/status)
+
+  ## Behavior (ฝั่ง server)
+  1. ตรวจขนาด/ชนิด (ด้านบน) — ถอดภาพใน thread แยก พร้อมกันได้ 2 ภาพ · JPEG ถอดแบบย่อ (draft ≥ 1024) ก่อน
+  2. `to_rgb_resized(512)`: หมุนตาม EXIF, RGBA → พื้นขาว, ด้านยาว ≤ 512 (เหมือนตอนสร้าง dataset) → **PNG lossless** data URL
+     (ไม่ encode JPEG ซ้ำ — JPEG รอบสองทำให้คำตอบเปลี่ยน ~5% บน gold)
+  3. สร้าง prompt (`dvl/prompt.py` `build_messages`) → `POST /v1/chat/completions` ของ llama-server (`temperature 0`, `max_tokens 64`, `logprobs` top-5) — เข้าคิวทีละคำขอ
+  4. parse JSON ที่โมเดลตอบ (`dvl/schema.py`) · คำนวณ `p_incident` จาก top-5 ของ token แรกของค่า `category`
+  5. กติกา abstain: `model_incident_type == no_incident` และ `p_incident ≥ threshold` → `unsure`/`other`/`mild` + `needs_review` (ดู docs ของ collection)
+  6. ไม่มี state — เรียกซ้ำได้ ผลควรเหมือนเดิม (temperature 0) แต่ llama-server ไม่ deterministic 100% ข้ามรอบ
+
+  ## Response
+
+  ### 200 OK
+  | Field | Type | Nullable | Description |
+  |-------|------|----------|-------------|
+  | `category` | string | ✅ | หมวดใน SOS catalog (`fire_hazard`, `disaster`, `rescue`, `accident`, `other`) · `null` เมื่อ `no_incident` |
+  | `incident_type` | string | ❌ | ค่า **หลัง** กติกา abstain — หนึ่งใน `/v1/labels` |
+  | `model_incident_type` | string | ✅ | คำตอบดิบของโมเดล **ก่อน** กติกา (ต่างจาก `incident_type` เมื่อ `review_reason = uncertain_no_incident`) · `null` เมื่อคำตอบพัง |
+  | `severity` | string | ❌ | `none` (เฉพาะ `no_incident`) / `mild` / `severe` |
+  | `confidence` | number | ❌ | ความน่าจะเป็นของ token ค่า incident_type ที่โมเดลตอบ (ของ `model_incident_type`) 0–1 ปัด 3 ตำแหน่ง · 0.0 ถ้าคำตอบพัง — มั่นใจเกินจริง อย่าใช้แทน `needs_review` |
+  | `p_incident` | number | ❌ | P(เป็นเหตุ) = 1 − P(category = null) ปัด 8 ตำแหน่ง — ค่าที่กติกา abstain ใช้ |
+  | `needs_review` | bool | ❌ | `true` = ต้องให้คนดูก่อนเชื่อผล |
+  | `review_reason` | string | ✅ | `null` · `uncertain_no_incident` · `model_unsure` · `invalid_output` |
+  | `incident_type_name_th` | string | ❌ | ชื่อไทยของ `incident_type` |
+  | `valid` | bool | ❌ | คำตอบของโมเดลเป็น JSON ที่ถูกต้องหรือไม่ |
+  | `model` | string | ❌ | ชื่อโมเดล (`DVL_MODEL_NAME`) |
+  | `threshold` | number | ❌ | T ของกติกา abstain (`DVL_ABSTAIN_T`, ค่าเริ่มต้น 3.2e-05) |
+  | `latency_ms` | int | ❌ | เวลาใน API ทั้งคำขอ (ถอดภาพ + รอคิว + llama-server) |
+
+  ### Error Cases
+  | Status | error | message | เกิดเมื่อ |
+  |--------|-------|---------|-----------|
+  | 400 | `missing_image` | `multipart field 'image' is required` | ไม่มี field `image` (04-Missing Image Field) |
+  | 400 | `undecodable_image` | `cannot decode image: <ExceptionName>` | เนื้อไฟล์ไม่ใช่ภาพ/ไฟล์เสีย (05-Undecodable Image) |
+  | 401 | `unauthorized` | `missing or wrong X-API-Key` | key ไม่ตรง (06-Wrong API Key) |
+  | 413 | `too_many_pixels` | `image exceeds 40000000 pixels` / `image WxH exceeds 40000000 pixels` | ภาพใหญ่เกิน 40 MP (07-Too Many Pixels) |
+  | 413 | `too_large` | `image larger than 10485760 bytes` | ไฟล์/คำขอใหญ่เกิน (08-Too Large) |
+  | 415 | `unsupported_media_type` | `content type <type> not allowed (jpeg/png/webp)` / `image format <FMT> not allowed (jpeg/png/webp)` | ชนิดไฟล์ไม่รองรับ (09-Unsupported Media Type) |
+  | 502 | `llama_unreachable` | `llama-server: <ExceptionName>` | ต่อ llama-server ไม่ได้ |
+  | 502 | `llama_error` | `llama-server returned <code>` / `bad llama-server response: <ExceptionName>` | llama-server ตอบผิดปกติ |
+  | 504 | `llama_timeout` | `llama-server did not answer within <DVL_TIMEOUT>s` | llama-server ช้าเกิน `DVL_TIMEOUT` |
+
+  ## Related Endpoints
+  - `GET /v1/labels` (02-Labels) — ค่าที่ `incident_type` เป็นได้
+  - `GET /health` (01-Health) — ตรวจก่อนส่งภาพ
+
+  ## Testing Notes
+  - fixture `fixtures/flood.jpg` = test_gold `e374542ee5ccab03` — ทดสอบแบบเจาะจง `flood` (โมเดลตอบ confidence 1.0 ทุกรอบที่ลอง)
+  - example `Building Fire` ใช้ `fixtures/building-fire.jpg` (test_gold `05567df96c3e618d`) — เปลี่ยน path ใน body เพื่อลองเอง
+  - `latency_ms` ใน example เป็นค่าตอน warm · คำขอแรกหลังเปิด server วัดได้ 928 ms
+}

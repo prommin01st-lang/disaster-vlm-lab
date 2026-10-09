@@ -1,0 +1,21 @@
+meta {
+  name: 03-Classify
+  seq: 3
+}
+
+docs {
+  # Classify (`POST /v1/classify`)
+
+  ส่งภาพ 1 ภาพ (multipart field `image`) → ผลจำแนก · ไฟล์ 01–03 เป็นกรณีสำเร็จ (200) · 04–09 เป็นกรณี error
+
+  ## Requests (รันตามลำดับนี้)
+  1. Classify Incident Image — `fixtures/flood.jpg` → `flood`
+  2. Classify No-Incident Image — `fixtures/no-incident.jpg` → `no_incident`, `needs_review=false`
+  3. Classify Uncertain No-Incident — `fixtures/uncertain-no-incident.jpg` → กติกา abstain ทำงาน (`needs_review=true`)
+  4. Missing Image Field — 400 `missing_image`
+  5. Undecodable Image — 400 `undecodable_image`
+  6. Wrong API Key — 401 `unauthorized` (skip เมื่อไม่ได้ตั้ง `apiKey`)
+  7. Too Many Pixels — 413 `too_many_pixels`
+  8. Too Large — 413 `too_large` (skip เสมอ — ดู docs ของไฟล์)
+  9. Unsupported Media Type — 415 `unsupported_media_type`
+}

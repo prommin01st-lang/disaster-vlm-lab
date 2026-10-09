@@ -1,0 +1,150 @@
+meta {
+  name: List Labels
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/v1/labels
+  body: none
+  auth: none
+}
+
+tests {
+  test("Status is 200", function() {
+    expect(res.status).to.equal(200);
+  });
+
+  test("14 labels with incident_type, category, name_th", function() {
+    expect(res.body).to.have.all.keys("labels");
+    expect(res.body.labels).to.be.an("array").with.lengthOf(14);
+    res.body.labels.forEach(function(l) {
+      expect(l).to.have.all.keys("incident_type", "category", "name_th");
+    });
+  });
+
+  test("no_incident has null category, unsure is other", function() {
+    const byType = Object.fromEntries(res.body.labels.map(function(l) { return [l.incident_type, l]; }));
+    expect(byType.no_incident.category).to.be.null;
+    expect(byType.unsure.category).to.equal("other");
+    expect(byType.flood.category).to.equal("disaster");
+  });
+}
+
+example {
+  name: 200 OK - Labels
+
+  request: {
+    url: {{baseUrl}}/v1/labels
+    method: get
+  }
+
+  response: {
+    status: {
+      code: 200
+      text: OK
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "labels": [
+            { "incident_type": "forest_fire", "category": "fire_hazard", "name_th": "ไฟป่า" },
+            { "incident_type": "building_fire", "category": "fire_hazard", "name_th": "ไหม้อาคาร" },
+            { "incident_type": "vehicle_fire", "category": "fire_hazard", "name_th": "ไหม้รถ" },
+            { "incident_type": "smoke_detected", "category": "fire_hazard", "name_th": "พบควัน / กลิ่นไหม้" },
+            { "incident_type": "flood", "category": "disaster", "name_th": "น้ำท่วม / น้ำป่าไหลหลาก" },
+            { "incident_type": "storm", "category": "disaster", "name_th": "พายุ / ลมรุนแรง" },
+            { "incident_type": "landslide", "category": "disaster", "name_th": "ดินถล่ม / โคลนถล่ม" },
+            { "incident_type": "damaged_structure", "category": "disaster", "name_th": "อาคารเสียหาย / เสี่ยงถล่ม" },
+            { "incident_type": "road_hazard", "category": "disaster", "name_th": "ถนนทรุด / หลุม / สิ่งกีดขวางอันตราย" },
+            { "incident_type": "building_collapse", "category": "rescue", "name_th": "อาคารถล่ม" },
+            { "incident_type": "water_rescue", "category": "rescue", "name_th": "คนติดค้างกลางน้ำ" },
+            { "incident_type": "vehicle_collision", "category": "accident", "name_th": "รถชน" },
+            { "incident_type": "unsure", "category": "other", "name_th": "ไม่แน่ใจประเภทเหตุ" },
+            { "incident_type": "no_incident", "category": null, "name_th": "ไม่ใช่เหตุ" }
+          ]
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 401 Unauthorized - Missing or Wrong Key
+  description: API เปิดด้วย DVL_API_KEY แต่คำขอไม่มี header X-API-Key (หรือค่าไม่ตรง)
+
+  request: {
+    url: {{baseUrl}}/v1/labels
+    method: get
+  }
+
+  response: {
+    status: {
+      code: 401
+      text: Unauthorized
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "error": "unauthorized",
+          "message": "missing or wrong X-API-Key"
+        }
+      '''
+    }
+  }
+}
+
+docs {
+  # List Labels
+
+  ## Overview
+  คืน `incident_type` ทั้ง 14 ค่าที่ `POST /v1/classify` ตอบได้ พร้อม `category` (หมวดใน SOS catalog) และชื่อไทย — ข้อมูลคงที่จาก `dvl/catalog.py` (`ALLOWED_TYPES`) ไม่เรียก llama-server
+
+  - **ใช้ที่:** SOS backend ตอน map ผลจำแนกเข้ากับประเภทเหตุใน catalog ของตัวเอง / ตรวจว่า catalog สองฝั่งตรงกัน
+  - **ใครเรียก:** SOS backend / นักพัฒนา
+  - **เมื่อไร:** ตอนเริ่มระบบหรือ deploy โมเดลใหม่ (ค่าเปลี่ยนเฉพาะเมื่อเปลี่ยนโมเดล/catalog)
+  - **ไม่ใช่:** catalog ทั้งหมดของ SOS — มีแค่ประเภทที่โมเดลถูกเทรนให้ตอบ
+
+  ## Request
+
+  ### Method & Path
+  ```
+  GET {{baseUrl}}/v1/labels
+  ```
+
+  ### Headers
+  | Header | Value | Required |
+  |--------|-------|----------|
+  | X-API-Key | `{{apiKey}}` | ✅ เมื่อตั้ง `DVL_API_KEY` · ❌ เมื่อไม่ตั้ง |
+
+  ## Response
+
+  ### 200 OK
+  | Field | Type | Nullable | Description |
+  |-------|------|----------|-------------|
+  | `labels` | array | ❌ | 14 รายการ เรียงตาม `dvl/catalog.py` |
+  | `labels[].incident_type` | string | ❌ | key ที่ `/v1/classify` ตอบใน `incident_type` |
+  | `labels[].category` | string | ✅ | `fire_hazard` / `disaster` / `rescue` / `accident` / `other` · `null` เฉพาะ `no_incident` |
+  | `labels[].name_th` | string | ❌ | ชื่อไทย (ค่าเดียวกับ `incident_type_name_th` ของ classify) |
+
+  `no_incident` ไม่มีใน SOS catalog = ไม่ต้องสร้างเหตุ · `unsure` = เหตุที่ไม่แน่ใจประเภท (รวมผลจากกติกา abstain)
+
+  ### Error Cases
+  | Status | error | message | เกิดเมื่อ |
+  |--------|-------|---------|-----------|
+  | 401 | `unauthorized` | `missing or wrong X-API-Key` | ตั้ง `DVL_API_KEY` แล้วแต่ header ไม่มี/ไม่ตรง |
+
+  ## Related Endpoints
+  - `POST /v1/classify` (03-Classify) — `incident_type` ในคำตอบเป็นหนึ่งในรายการนี้เสมอ
+
+  ## Testing Notes
+  - ตรวจจำนวน 14 รายการ + `no_incident.category = null` + `unsure.category = other`
+}

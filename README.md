@@ -368,6 +368,19 @@ var result = await res.Content.ReadFromJsonAsync<ClassifyResult>(
 // result.NeedsReview → ส่งให้เจ้าหน้าที่ยืนยัน · IncidentType == "no_incident" && !NeedsReview → ไม่ใช่เหตุ
 ```
 
+### Bruno collection
+
+`bruno/` — เอกสาร contract ของทุก endpoint (docs ภาษาไทย + ตัวอย่าง request/response จริงทุก status) และชุดเทสที่รันได้
+(fixtures เป็นภาพจริงจาก test_gold รวมภาพที่ทำให้กติกา abstain ทำงาน):
+
+```bash
+cd bruno
+bru run --env Local                              # API เปิดแบบไม่มี key (06-Wrong API Key ถูก skip)
+bru run --env Local --env-var apiKey=secret123   # API เปิดด้วย DVL_API_KEY=secret123
+```
+
+`08-Too Large` ถูก skip เสมอ (ต้องใช้ไฟล์ > 10 MB ที่ไม่ได้ commit — ดู docs ในไฟล์)
+
 ### ตรวจจริงบนเครื่อง (gold 247 ภาพ ผ่าน `api/run.sh`)
 
 | | API (PNG lossless) | API (รอบแรก, JPEG q95) | `predict_gguf.py` + กติกา (ส่งไฟล์ดิบ) |

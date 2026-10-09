@@ -1,0 +1,134 @@
+meta {
+  name: Get Health
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/health
+  body: none
+  auth: none
+}
+
+tests {
+  test("Status is 200", function() {
+    expect(res.status).to.equal(200);
+  });
+
+  test("Body has status, llama, model", function() {
+    expect(res.body).to.have.all.keys("status", "llama", "model");
+    expect(res.body.status).to.equal("ok");
+    expect(res.body.llama).to.equal("ok");
+    expect(res.body.model).to.be.a("string").and.not.empty;
+  });
+}
+
+example {
+  name: 200 OK - Ready
+
+  request: {
+    url: {{baseUrl}}/health
+    method: get
+  }
+
+  response: {
+    status: {
+      code: 200
+      text: OK
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "status": "ok",
+          "llama": "ok",
+          "model": "dvl-qwen3.5-2b-Q4_K_M"
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 503 Service Unavailable - llama-server Unreachable
+  description: เปิด uvicorn โดยชี้ DVL_LLAMA_URL ไปพอร์ตที่ไม่มี llama-server (http://127.0.0.1:8099) — แบบเดียวกับตอน llama-server ยังไม่เปิดหรือตายไป
+
+  request: {
+    url: {{baseUrl}}/health
+    method: get
+  }
+
+  response: {
+    status: {
+      code: 503
+      text: Service Unavailable
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "status": "unavailable",
+          "llama": "llama-server unreachable: ConnectError",
+          "model": "dvl-qwen3.5-2b-Q4_K_M"
+        }
+      '''
+    }
+  }
+}
+
+docs {
+  # Get Health
+
+  ## Overview
+  ตรวจความพร้อมของ API — API เรียก `GET /health` ของ llama-server (timeout 5 s) แล้วตอบ 200 เมื่อ llama-server ตอบ 200 ไม่งั้น 503
+
+  - **ใช้ที่:** health check ของ SOS backend ก่อน/ระหว่างส่งภาพ, monitoring, `api/run.sh` ก็รอ `/health` ของ llama-server แบบเดียวกัน
+  - **ใครเรียก:** SOS backend (ASP.NET Core) / ผู้ดูแลระบบ
+  - **เมื่อไร:** ตอนเริ่มระบบ และเป็นระยะ — 503 ระหว่างโหลดโมเดล (ไม่กี่วินาทีหลังเปิด) หรือเมื่อ llama-server ไม่ได้เปิด
+  - **ไม่ใช่:** การตรวจว่าโมเดลจำแนกถูก (ใช้ `POST /v1/classify`)
+
+  ## Request
+
+  ### Method & Path
+  ```
+  GET {{baseUrl}}/health
+  ```
+
+  ### Headers
+  | Header | Value | Required |
+  |--------|-------|----------|
+  | X-API-Key | `{{apiKey}}` (สคริปต์ collection ใส่ให้ถ้าตั้ง) | ❌ No — `/health` ไม่ตรวจ key |
+
+  ไม่มี query / body
+
+  ## Response
+
+  ### 200 OK / 503 Service Unavailable
+  | Field | Type | Nullable | Description |
+  |-------|------|----------|-------------|
+  | `status` | string | ❌ | `ok` (200) · `unavailable` (503) |
+  | `llama` | string | ❌ | `ok` · `llama-server /health <code>` (llama-server ตอบไม่ใช่ 200 เช่น 503 ตอนกำลังโหลดโมเดล) · `llama-server unreachable: <ExceptionName>` (ต่อไม่ได้/timeout) |
+  | `model` | string | ❌ | ชื่อโมเดล (`DVL_MODEL_NAME`) |
+
+  ### Error Cases
+  | Status | status | llama | เกิดเมื่อ |
+  |--------|--------|-------|-----------|
+  | 503 | `unavailable` | `llama-server /health 503` | llama-server กำลังโหลดโมเดล |
+  | 503 | `unavailable` | `llama-server unreachable: ConnectError` | llama-server ไม่ได้เปิด / พอร์ตผิด |
+  | 503 | `unavailable` | `llama-server unreachable: ReadTimeout` | llama-server ไม่ตอบใน 5 s |
+
+  503 ของ endpoint นี้ **ไม่ใช่** รูปแบบ `{"error","message"}` แบบ error อื่น
+
+  ## Related Endpoints
+  - `POST /v1/classify` (03-Classify) — ถ้า `/health` เป็น 503 คำขอ classify จะได้ 502 `llama_unreachable`
+
+  ## Testing Notes
+  - request นี้คาดหวัง 200 (ต้องเปิด `api/run.sh` ก่อน) · 503 ดูได้จาก example เท่านั้น — สร้างเองได้ด้วย
+    `DVL_LLAMA_URL=http://127.0.0.1:8099 ../iron-coach-th/.venv/bin/python -m uvicorn api.app:app --port 8093` แล้วเรียก `/health` ที่ :8093
+}

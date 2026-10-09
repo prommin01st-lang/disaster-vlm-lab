@@ -1,0 +1,95 @@
+meta {
+  name: Missing Image Field
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/v1/classify
+  body: multipartForm
+  auth: none
+}
+
+body:multipart-form {
+  file: @file(fixtures/flood.jpg)
+}
+
+tests {
+  test("Status is 400", function() {
+    expect(res.status).to.equal(400);
+  });
+
+  test("Error is missing_image", function() {
+    expect(res.body).to.have.all.keys("error", "message");
+    expect(res.body.error).to.equal("missing_image");
+    expect(res.body.message).to.equal("multipart field 'image' is required");
+  });
+}
+
+example {
+  name: 400 Bad Request - Missing image Field
+  description: ส่งภาพในชื่อ field `file` แทน `image`
+
+  request: {
+    url: {{baseUrl}}/v1/classify
+    method: post
+    mode: multipartForm
+    body:multipart-form: {
+      file: @file(fixtures/flood.jpg)
+    }
+  }
+
+  response: {
+    status: {
+      code: 400
+      text: Bad Request
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "error": "missing_image",
+          "message": "multipart field 'image' is required"
+        }
+      '''
+    }
+  }
+}
+
+docs {
+  # Missing Image Field
+
+  ## Overview
+  ส่ง multipart ที่ไม่มี field ชื่อ `image` (ที่นี่ส่งภาพในชื่อ `file`) → `400 missing_image` — ตรวจก่อนอ่านไฟล์ ไม่เรียก llama-server
+
+  - **เกิดจริงเมื่อ:** ฝั่ง SOS ตั้งชื่อ field ผิด (`form.Add(file, "image", "photo.jpg")` — ชื่อ field ต้องเป็น `"image"`) หรือส่ง body ว่าง
+  - field อื่นนอกจาก `image` ถูกเมิน
+
+  ## Request
+  ```
+  POST {{baseUrl}}/v1/classify
+  ```
+  | Field | Type | Description |
+  |-------|------|-------------|
+  | `file` | file | `fixtures/flood.jpg` — ชื่อ field ผิดโดยตั้งใจ |
+
+  ## Response
+
+  ### 400 Bad Request
+  | Field | Type | Description |
+  |-------|------|-------------|
+  | `error` | string | `missing_image` |
+  | `message` | string | `multipart field 'image' is required` |
+
+  ### Error Cases
+  | Status | error | message | เกิดเมื่อ |
+  |--------|-------|---------|-----------|
+  | 400 | `missing_image` | `multipart field 'image' is required` | ไม่มี field `image` |
+  | 401 | `unauthorized` | `missing or wrong X-API-Key` | ตั้ง `DVL_API_KEY` แล้ว key ไม่ตรง (ตรวจ key ก่อน field) |
+
+  ## Related Endpoints
+  - 01-Classify Incident Image — คำขอที่ถูกต้อง
+}

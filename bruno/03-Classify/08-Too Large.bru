@@ -1,0 +1,107 @@
+meta {
+  name: Too Large
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/v1/classify
+  body: multipartForm
+  auth: none
+}
+
+body:multipart-form {
+  image: @file(fixtures/flood.jpg)
+}
+
+script:pre-request {
+  // ต้องใช้ไฟล์ > 10 MB ซึ่งไม่ commit ไว้ใน repo และ Bruno สร้างไฟล์ตอนรันไม่ได้ → ข้ามเสมอ (ดูวิธีทดสอบเองใน docs)
+  bru.runner.skipRequest();
+}
+
+tests {
+  test("Status is 413", function() {
+    expect(res.status).to.equal(413);
+  });
+
+  test("Error is too_large", function() {
+    expect(res.body).to.have.all.keys("error", "message");
+    expect(res.body.error).to.equal("too_large");
+    expect(res.body.message).to.equal("image larger than 10485760 bytes");
+  });
+}
+
+example {
+  name: 413 Payload Too Large - 11 MB File
+  description: แนบไฟล์ 11 MB (11534336 byte, สร้างด้วย head -c 11534336 /dev/urandom > big-11mb.jpg) — ไม่ได้ commit ไว้ใน repo
+
+  request: {
+    url: {{baseUrl}}/v1/classify
+    method: post
+    mode: multipartForm
+    body:multipart-form: {
+      image: @file(fixtures/big-11mb.jpg)
+    }
+  }
+
+  response: {
+    status: {
+      code: 413
+      text: Request Entity Too Large
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "error": "too_large",
+          "message": "image larger than 10485760 bytes"
+        }
+      '''
+    }
+  }
+}
+
+docs {
+  # Too Large
+
+  ## Overview
+  ไฟล์ภาพ > 10 MB (10485760 byte) → `413 too_large` · ตรวจ 2 ชั้น:
+  1. middleware `BodyLimit`: body ทั้งคำขอ > 10 MB + 64 KB — ดูจาก `Content-Length` (ปฏิเสธก่อนอ่าน body) หรือนับ byte ระหว่างอ่านสำหรับ chunked (หยุดอ่านทันที ไม่ spool ลงดิสก์)
+  2. ใน handler: ไฟล์ใน field `image` > 10 MB (กรณี body รวมยังไม่เกินเพดานชั้นแรก)
+
+  ทั้งสองชั้นตอบ JSON เดียวกัน
+
+  ## Request
+  ```
+  POST {{baseUrl}}/v1/classify
+  ```
+  | Field | Type | Description |
+  |-------|------|-------------|
+  | `image` | file | ไฟล์ > 10 MB (example ใช้ `fixtures/big-11mb.jpg` ซึ่ง **ไม่มีใน repo**) |
+
+  ## Response
+
+  ### 413 Payload Too Large
+  | Field | Type | Description |
+  |-------|------|-------------|
+  | `error` | string | `too_large` |
+  | `message` | string | `image larger than 10485760 bytes` |
+
+  ### Error Cases
+  | Status | error | message | เกิดเมื่อ |
+  |--------|-------|---------|-----------|
+  | 413 | `too_large` | `image larger than 10485760 bytes` | body > 10 MB + 64 KB หรือไฟล์ > 10 MB (รวม chunked) |
+
+  ## Testing Notes
+  - **request นี้ถูก skip เสมอ** — repo ไม่ commit ไฟล์ > 1 MB และ Bruno สร้างไฟล์ขนาดใหญ่ตอนรันไม่ได้ (body ของ live request ชี้ `fixtures/flood.jpg` เพื่อให้ไฟล์ .bru โหลดได้เท่านั้น)
+  - response ใน example เป็นของจริงจาก curl:
+    ```bash
+    head -c 11534336 /dev/urandom > /tmp/big-11mb.jpg
+    curl -si -F "image=@/tmp/big-11mb.jpg;type=image/jpeg" http://127.0.0.1:8092/v1/classify
+    curl -si -H "Transfer-Encoding: chunked" -F "image=@/tmp/big-11mb.jpg;type=image/jpeg" http://127.0.0.1:8092/v1/classify   # chunked → 413 เดียวกัน
+    ```
+  - ทดสอบใน Bruno เอง: สร้างไฟล์ข้างบนไว้ที่ `bruno/fixtures/big-11mb.jpg` (อย่า commit) เปลี่ยน body เป็นไฟล์นั้น แล้วลบบรรทัด `bru.runner.skipRequest()`
+}

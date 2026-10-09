@@ -1,0 +1,127 @@
+script:pre-request {
+  // ใส่ X-API-Key เฉพาะเมื่อตั้ง apiKey (vars:secret ใน environment หรือ --env-var apiKey=...) — รันได้ทั้งแบบมี/ไม่มี key
+  // request ที่ต้องการ header อื่น (เช่น 03-Classify/06-Wrong API Key) ตั้งทับใน pre-request ของตัวเอง (รันหลังสคริปต์นี้)
+  const key = bru.getEnvVar("apiKey");
+  if (key) {
+    req.setHeader("X-API-Key", key);
+  }
+}
+
+docs {
+  # DVL Incident Classifier API
+
+  เอกสาร contract ของ HTTP API ของ **disaster-vlm-lab** — ส่งภาพแจ้งเหตุ 1 ภาพ → ได้ JSON ประเภทเหตุตาม SOS catalog + ธง `needs_review`
+  1 ไฟล์ต่อ 1 endpoint/กรณี พร้อมตัวอย่าง request/response **จริง** (รันกับ `api/run.sh` บน RTX 2060 เมื่อ 09/10/2026)
+
+  > **path ของโค้ด** (`api/...`, `dvl/...`, `scripts/...`, `reports/...`) อ้างจาก root ของ repo `disaster-vlm-lab`
+  > · path ของเอกสาร (`01-Health/...`, `fixtures/...`, `environments/...`) อ้างจากโฟลเดอร์ `bruno/`
+
+  ## บริการนี้คืออะไร
+
+  โมเดล vision-language **Qwen3.5-2B fine-tune (LoRA)** สำหรับคัดกรองภาพที่ประชาชนแนบมากับการแจ้งเหตุ → จัดเป็น 1 ใน 14 `incident_type`
+  (13 ประเภทเหตุใน SOS catalog + `no_incident`) พร้อม `category` และ `severity` · ใช้ช่วยเจ้าหน้าที่ ไม่ได้ตัดสินแทน — ผลที่ไม่แน่ใจถูกส่งให้คนดูผ่าน `needs_review`
+
+  ## สถาปัตยกรรม
+
+  ```
+  SOS backend (ASP.NET Core, HttpClient)
+     │  POST /v1/classify (multipart field "image")       X-API-Key (ถ้าตั้ง DVL_API_KEY)
+     ▼
+  DVL API  :8092  (FastAPI/uvicorn — api/app.py)
+     │  ตรวจไฟล์ → ย่อ ≤512 → PNG lossless → prompt → กติกา abstain
+     ▼
+  llama-server  :8091  (llama.cpp b10909, -np 1)
+     GGUF Q4_K_M + mmproj F16 บน RTX 2060 6 GB (VRAM ~2.5 GB)
+  ```
+
+  - ทั้งสองพอร์ต bind ที่ `127.0.0.1` เป็นค่าเริ่มต้น — ถ้าจะให้เครื่องอื่นเรียก ตั้ง `DVL_API_HOST=0.0.0.0` **และ** `DVL_API_KEY`
+  - คำขอไป llama-server เข้าคิวทีละคำขอ (`-np 1`) — ส่งพร้อมกันได้แต่จะรอคิว · ถอดภาพพร้อมกันได้ 2 ภาพ
+  - latency ~300–550 ms/ภาพ (warm) · คำขอแรกหลังเปิดช้ากว่า (~0.9 s ที่วัดได้)
+
+  ## เปิดใช้งาน
+
+  ```bash
+  cd disaster-vlm-lab
+  ../iron-coach-th/.venv/bin/pip install -r api/requirements.txt   # ครั้งแรก
+  api/run.sh                         # เปิด llama-server :8091 (ถ้ายังไม่ healthy) → รอ /health → uvicorn :8092
+  DVL_API_KEY=secret123 api/run.sh   # เปิดแบบบังคับ key
+  ```
+
+  Ctrl+C ปิดทั้ง uvicorn และ llama-server ที่สคริปต์เปิดเอง (ถ้า llama-server เปิดอยู่ก่อนแล้วจะใช้ต่อและไม่ปิด) · ปิดก่อนเทรน/ใช้ GPU งานอื่น
+
+  ## รัน collection
+
+  ```bash
+  cd disaster-vlm-lab/bruno
+  bru run --env Local                                  # API เปิดแบบไม่มี key
+  bru run --env Local --env-var apiKey=secret123       # API เปิดด้วย DVL_API_KEY=secret123
+  ```
+
+  - `03-Classify/06-Wrong API Key` ถูก **skip** เมื่อไม่ได้ตั้ง `apiKey` (server ที่ไม่มี key ไม่มีทางตอบ 401)
+  - `03-Classify/08-Too Large` ถูก **skip เสมอ** — ต้องใช้ไฟล์ > 10 MB ซึ่งไม่ commit ไว้ใน repo (ตัวอย่าง response ในไฟล์เป็นของจริงจาก curl)
+  - `01-Health` 503 ดูได้จาก example เท่านั้น (ต้องปิด llama-server)
+
+  ## needs_review และกติกา abstain
+
+  โมเดลพลาดเหตุจริงโดยตอบ `no_incident` ได้ — API จึงคำนวณ **`p_incident` = P(เป็นเหตุ) = 1 − P(category = null)** จาก logprob ของ token แรกของค่า `category`
+  (top-5; ถ้า `null` หลุด top-5 ถือว่า 1.0) แล้วใช้กติกา:
+
+  > โมเดลตอบ `no_incident` **และ** `p_incident ≥ threshold` → เปลี่ยนผลเป็น `incident_type=unsure`, `category=other`, `severity=mild`,
+  > `needs_review=true`, `review_reason=uncertain_no_incident` (คำตอบดิบยังอยู่ใน `model_incident_type`)
+
+  | `review_reason` | เกิดเมื่อ | `needs_review` |
+  |---|---|---|
+  | `null` | ผลปกติ เชื่อได้ตามโมเดล | `false` |
+  | `uncertain_no_incident` | กติกา abstain ทำงาน (ข้างบน) | `true` |
+  | `model_unsure` | โมเดลตอบ `unsure` เอง | `true` |
+  | `invalid_output` | คำตอบของโมเดลไม่ใช่ JSON ที่ถูกต้อง → `unsure`, `valid=false` | `true` |
+
+  ฝั่ง SOS ควรถือ `needs_review=true` = "อาจเป็นเหตุ ให้เจ้าหน้าที่ยืนยัน" **ไม่ใช่ทิ้ง** · `incident_type == "no_incident" && !needs_review` → ไม่ใช่เหตุ
+  ผลบน gold 247 ภาพ: miss (เหตุจริง → no_incident) 0.045 → 0.018 แลกกับภาพที่ต้องให้คนดู ~5–10%
+
+  ## โมเดลและ threshold
+
+  - `model`: `dvl-qwen3.5-2b-Q4_K_M` (`DVL_MODEL_NAME`; run.sh ตั้งจากชื่อไฟล์ GGUF)
+  - `threshold`: **T = 3.2e-5** (`DVL_ABSTAIN_T`) — เลือกบน val สำหรับ Q4_K_M + llama.cpp b10909 (`reports/abstain-q4.md`) · เปลี่ยน quant/โมเดลต้อง sweep ใหม่ (`scripts/abstain_sweep.py`)
+  - `confidence` มั่นใจเกินจริง (มัก 1.0) — **อย่าใช้แทน `needs_review`**
+
+  ## Auth
+
+  - `DVL_API_KEY` ไม่ตั้ง (ค่าเริ่มต้น) = ไม่ตรวจ key
+  - ตั้งแล้ว: ทุก `/v1/*` ต้องมี header `X-API-Key` ตรงกัน (เทียบแบบ constant-time) ไม่งั้น `401 unauthorized` · `/health` ไม่ต้องใช้ key
+  - ใน collection: ตั้ง `apiKey` (vars:secret ของ environment `Local` หรือ `--env-var apiKey=...`) → สคริปต์ pre-request ของ collection ใส่ header ให้ทุก request
+
+  ## Timeout ฝั่ง SOS (HttpClient)
+
+  `DVL_TIMEOUT` (ค่าเริ่มต้น 60 s) นับเฉพาะตอนรอ llama-server **ไม่นับเวลารอคิว** (~0.5 s × จำนวนคำขอที่รออยู่ก่อนหน้า)
+  → **`HttpClient.Timeout` ต้องมากกว่า `DVL_TIMEOUT` + เวลารอคิว** เช่นตั้ง 120 s · llama-server ไม่ตอบทันเวลา → `504 llama_timeout` · ต่อไม่ได้ → `502 llama_unreachable`
+
+  ## รูปแบบ error
+
+  ทุก error (ยกเว้น `/health` 503) เป็น JSON `{"error": "<code>", "message": "..."}`:
+
+  | Status | error | เกิดเมื่อ |
+  |---|---|---|
+  | 400 | `missing_image` | ไม่มี multipart field `image` |
+  | 400 | `undecodable_image` | เนื้อไฟล์ถอดเป็นภาพไม่ได้ |
+  | 401 | `unauthorized` | ตั้ง `DVL_API_KEY` แล้วแต่ไม่ส่ง/ส่ง `X-API-Key` ผิด |
+  | 413 | `too_large` | ไฟล์ > 10 MB หรือ body ทั้งคำขอ > 10 MB + 64 KB |
+  | 413 | `too_many_pixels` | header ภาพประกาศเกิน 40 ล้าน pixel (กัน decompression bomb) |
+  | 415 | `unsupported_media_type` | content type ของ part หรือรูปแบบไฟล์จริงไม่ใช่ jpeg/png/webp |
+  | 502 | `llama_unreachable` / `llama_error` | ต่อ llama-server ไม่ได้ / ตอบไม่ใช่ 200 หรือรูปแบบผิด |
+  | 504 | `llama_timeout` | llama-server ไม่ตอบภายใน `DVL_TIMEOUT` |
+
+  ## Fixtures (`fixtures/`)
+
+  | ไฟล์ | ที่มา | ใช้ใน |
+  |---|---|---|
+  | `flood.jpg` | test_gold `e374542ee5ccab03` (flood, CrisisMMD) | 01-Classify Incident Image |
+  | `building-fire.jpg` | test_gold `05567df96c3e618d` (building_fire, CrisisMMD) | example ของ 01 |
+  | `no-incident.jpg` | test_gold `fb4fa14ff082ee2f` (no_incident, CrisisMMD) | 02-Classify No-Incident Image |
+  | `uncertain-no-incident.jpg` | test_gold `fd5a1ada5004c085` (label storm — โปสเตอร์ Hurricane Harvey) | 03-Classify Uncertain No-Incident |
+  | `not-an-image.jpg` | ข้อความล้วน 37 byte | 05-Undecodable Image |
+  | `sample.gif` | GIF 8×8 | 09-Unsupported Media Type |
+  | `bomb-20000x20000.png` | PNG 89 byte ที่ header ประกาศ 20000×20000 (1-bit) | 07-Too Many Pixels |
+
+  ภาพจาก dataset ต้นทางที่เป็นไลเซนส์ non-commercial — ใช้เพื่อการเรียน/ทดสอบเท่านั้น
+}

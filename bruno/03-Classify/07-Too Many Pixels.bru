@@ -1,0 +1,131 @@
+meta {
+  name: Too Many Pixels
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/v1/classify
+  body: multipartForm
+  auth: none
+}
+
+body:multipart-form {
+  image: @file(fixtures/bomb-20000x20000.png)
+}
+
+tests {
+  test("Status is 413", function() {
+    expect(res.status).to.equal(413);
+  });
+
+  test("Error is too_many_pixels", function() {
+    expect(res.body).to.have.all.keys("error", "message");
+    expect(res.body.error).to.equal("too_many_pixels");
+    expect(res.body.message).to.match(/exceeds 40000000 pixels$/);
+  });
+}
+
+example {
+  name: 413 Payload Too Large - 20000x20000 PNG (decompression bomb)
+  description: แนบ fixtures/bomb-20000x20000.png (89 byte, header ประกาศ 400 ล้าน pixel) — เกิน 2 เท่าของ cap PIL จึง raise DecompressionBombError ตอนเปิดไฟล์ (message ไม่มีขนาด)
+
+  request: {
+    url: {{baseUrl}}/v1/classify
+    method: post
+    mode: multipartForm
+    body:multipart-form: {
+      image: @file(fixtures/bomb-20000x20000.png)
+    }
+  }
+
+  response: {
+    status: {
+      code: 413
+      text: Request Entity Too Large
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "error": "too_many_pixels",
+          "message": "image exceeds 40000000 pixels"
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 413 Payload Too Large - 7000x7000 PNG
+  description: PNG 1-bit 7000×7000 (49 ล้าน pixel, ~6 KB — ไม่ได้ commit; สร้างด้วย PIL Image.new("1", (7000, 7000)).save(...)) — อยู่ระหว่าง 1–2 เท่าของ cap จึงถูกตรวจ w×h ใน _decode (message มีขนาด)
+
+  request: {
+    url: {{baseUrl}}/v1/classify
+    method: post
+    mode: multipartForm
+    body:multipart-form: {
+      image: @file(fixtures/px-7000x7000.png)
+    }
+  }
+
+  response: {
+    status: {
+      code: 413
+      text: Request Entity Too Large
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "error": "too_many_pixels",
+          "message": "image 7000x7000 exceeds 40000000 pixels"
+        }
+      '''
+    }
+  }
+}
+
+docs {
+  # Too Many Pixels
+
+  ## Overview
+  กัน **decompression bomb**: PNG 1-bit เพียงไม่กี่สิบ byte ประกาศขนาด 20000×20000 ได้ ถ้าถอดจริงจะกิน RAM หลาย GB
+  API อ่านแค่ header แล้วปฏิเสธภาพที่ w×h > 40,000,000 pixel **ก่อนถอด pixel** → `413 too_many_pixels`
+
+  - เกิน 40 MP แต่ไม่เกิน 80 MP → `_decode` ตรวจเอง: message `image WxH exceeds 40000000 pixels`
+  - เกิน 80 MP (2× `Image.MAX_IMAGE_PIXELS`) → PIL raise `DecompressionBombError` ตั้งแต่ `Image.open`: message `image exceeds 40000000 pixels`
+  - ภาพถ่ายจริงจากมือถือ (12–50 MP) ส่วนใหญ่ผ่าน — กล้อง > 40 MP ควรย่อฝั่ง client ก่อนส่ง (API ย่อเหลือด้านยาว 512 อยู่แล้ว)
+
+  ## Request
+  ```
+  POST {{baseUrl}}/v1/classify
+  ```
+  | Field | Type | Description |
+  |-------|------|-------------|
+  | `image` | file | `fixtures/bomb-20000x20000.png` (`image/png`, 89 byte: IHDR 20000×20000 1-bit + IDAT สั้น ๆ) |
+
+  ## Response
+
+  ### 413 Payload Too Large
+  | Field | Type | Description |
+  |-------|------|-------------|
+  | `error` | string | `too_many_pixels` |
+  | `message` | string | `image exceeds 40000000 pixels` หรือ `image WxH exceeds 40000000 pixels` |
+
+  ### Error Cases
+  | Status | error | message | เกิดเมื่อ |
+  |--------|-------|---------|-----------|
+  | 413 | `too_many_pixels` | `image exceeds 40000000 pixels` | w×h > 80 MP |
+  | 413 | `too_many_pixels` | `image WxH exceeds 40000000 pixels` | 40 MP < w×h ≤ 80 MP |
+  | 413 | `too_large` | `image larger than 10485760 bytes` | ขนาดไฟล์ (byte) เกิน — ดู 08 |
+
+  ## Related Endpoints
+  - 08-Too Large — จำกัดขนาดไฟล์เป็น byte (คนละเงื่อนไข)
+}

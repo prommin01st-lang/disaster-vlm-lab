@@ -1,0 +1,96 @@
+meta {
+  name: Undecodable Image
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/v1/classify
+  body: multipartForm
+  auth: none
+}
+
+body:multipart-form {
+  image: @file(fixtures/not-an-image.jpg)
+}
+
+tests {
+  test("Status is 400", function() {
+    expect(res.status).to.equal(400);
+  });
+
+  test("Error is undecodable_image", function() {
+    expect(res.body).to.have.all.keys("error", "message");
+    expect(res.body.error).to.equal("undecodable_image");
+    expect(res.body.message).to.match(/^cannot decode image: /);
+  });
+}
+
+example {
+  name: 400 Bad Request - Not an Image
+  description: แนบ fixtures/not-an-image.jpg (ข้อความล้วน) ด้วย content type image/jpeg
+
+  request: {
+    url: {{baseUrl}}/v1/classify
+    method: post
+    mode: multipartForm
+    body:multipart-form: {
+      image: @file(fixtures/not-an-image.jpg)
+    }
+  }
+
+  response: {
+    status: {
+      code: 400
+      text: Bad Request
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "error": "undecodable_image",
+          "message": "cannot decode image: UnidentifiedImageError"
+        }
+      '''
+    }
+  }
+}
+
+docs {
+  # Undecodable Image
+
+  ## Overview
+  content type ของ part ถูกต้อง (`image/jpeg` จากนามสกุล `.jpg`) แต่เนื้อไฟล์ถอดเป็นภาพไม่ได้ → `400 undecodable_image`
+  (PIL โยน `UnidentifiedImageError`, `OSError`, `SyntaxError` ฯลฯ — ชื่อ exception อยู่ท้าย `message`) · ไม่เรียก llama-server
+
+  - **เกิดจริงเมื่อ:** ไฟล์อัปโหลดไม่ครบ/เสีย, ส่ง HTML/ข้อความผิดไฟล์, ภาพ HEIC ที่ตั้งนามสกุล .jpg
+
+  ## Request
+  ```
+  POST {{baseUrl}}/v1/classify
+  ```
+  | Field | Type | Description |
+  |-------|------|-------------|
+  | `image` | file | `fixtures/not-an-image.jpg` — ข้อความ 37 byte (`image/jpeg`) |
+
+  ## Response
+
+  ### 400 Bad Request
+  | Field | Type | Description |
+  |-------|------|-------------|
+  | `error` | string | `undecodable_image` |
+  | `message` | string | `cannot decode image: <ExceptionName>` |
+
+  ### Error Cases
+  | Status | error | message | เกิดเมื่อ |
+  |--------|-------|---------|-----------|
+  | 400 | `undecodable_image` | `cannot decode image: UnidentifiedImageError` | ไม่ใช่ไฟล์ภาพที่รู้จัก |
+  | 400 | `undecodable_image` | `cannot decode image: OSError` | header ถูกแต่ข้อมูลภาพเสีย/ถูกตัด |
+  | 415 | `unsupported_media_type` | `image format <FMT> not allowed (jpeg/png/webp)` | ถอดได้แต่เป็นรูปแบบอื่น (เช่น GIF) — ดู 09 |
+
+  ## Related Endpoints
+  - 09-Unsupported Media Type — รูปแบบที่ถอดได้แต่ไม่รองรับ
+}

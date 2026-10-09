@@ -1,0 +1,132 @@
+meta {
+  name: Classify Uncertain No-Incident
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/v1/classify
+  body: multipartForm
+  auth: none
+}
+
+body:multipart-form {
+  image: @file(fixtures/uncertain-no-incident.jpg)
+}
+
+tests {
+  test("Status is 200", function() {
+    expect(res.status).to.equal(200);
+  });
+
+  test("Model said no_incident but p_incident >= threshold", function() {
+    expect(res.body.model_incident_type).to.equal("no_incident");
+    expect(res.body.p_incident).to.be.at.least(res.body.threshold);
+  });
+
+  test("Abstain gate rewrote the result to unsure/other/mild + needs_review", function() {
+    expect(res.body.incident_type).to.equal("unsure");
+    expect(res.body.category).to.equal("other");
+    expect(res.body.severity).to.equal("mild");
+    expect(res.body.incident_type_name_th).to.equal("ไม่แน่ใจประเภทเหตุ");
+    expect(res.body.needs_review).to.be.true;
+    expect(res.body.review_reason).to.equal("uncertain_no_incident");
+    expect(res.body.valid).to.be.true;
+  });
+}
+
+example {
+  name: 200 OK - needs_review (uncertain_no_incident)
+  description: ภาพจริง fixtures/uncertain-no-incident.jpg — โปสเตอร์ระดมทุน Hurricane Harvey มีภาพน้ำท่วมจาง ๆ เป็นพื้นหลัง (gold label storm)
+
+  request: {
+    url: {{baseUrl}}/v1/classify
+    method: post
+    mode: multipartForm
+    body:multipart-form: {
+      image: @file(fixtures/uncertain-no-incident.jpg)
+    }
+  }
+
+  response: {
+    status: {
+      code: 200
+      text: OK
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "category": "other",
+          "incident_type": "unsure",
+          "model_incident_type": "no_incident",
+          "severity": "mild",
+          "confidence": 1.0,
+          "p_incident": 0.0001162,
+          "needs_review": true,
+          "review_reason": "uncertain_no_incident",
+          "incident_type_name_th": "ไม่แน่ใจประเภทเหตุ",
+          "valid": true,
+          "model": "dvl-qwen3.5-2b-Q4_K_M",
+          "threshold": 3.2e-05,
+          "latency_ms": 286
+        }
+      '''
+    }
+  }
+}
+
+docs {
+  # Classify Uncertain No-Incident
+
+  ## Overview
+  กรณีที่ **กติกา abstain ทำงาน**: โมเดลตอบ `no_incident` (`confidence` 1.0) แต่ `p_incident = 0.0001162 ≥ threshold 3.2e-05`
+  → API เปลี่ยนผลเป็น `unsure` / `other` / `mild` และตั้ง `needs_review=true`, `review_reason=uncertain_no_incident`
+
+  ภาพ (`fixtures/uncertain-no-incident.jpg`) เป็นโปสเตอร์ "Hurricane Harvey Disaster Relief" ที่มีภาพน้ำท่วมจาง ๆ อยู่ด้านหลัง — gold label คือ `storm`
+  จึงเป็นตัวอย่างที่กติกาช่วยกันไม่ให้เหตุจริงหลุดเป็น "ไม่ใช่เหตุ" (ถ้าไม่มีกติกา ผลจะเป็น miss)
+
+  - **ใช้ที่ / ใครเรียก / เมื่อไร:** เหมือน 01-Classify Incident Image
+  - **ฝั่ง SOS:** `needs_review=true` = "อาจเป็นเหตุ ให้เจ้าหน้าที่ยืนยัน" — **ห้ามทิ้ง** และอย่าใช้ `confidence` (1.0) ตัดสิน เพราะอ้างถึงคำตอบดิบ `no_incident`
+
+  ## กติกา abstain
+  ```
+  p_incident = 1 − Σ P(token แรกของค่า category = "null")   (จาก top-5 logprobs; null หลุด top-5 → 1.0)
+  if model_incident_type == "no_incident" and p_incident >= threshold:
+      incident_type, category, severity = "unsure", "other", "mild"
+      needs_review, review_reason = true, "uncertain_no_incident"
+  ```
+  threshold = `DVL_ABSTAIN_T` (3.2e-05 — เลือกบน val สำหรับ Q4_K_M + llama.cpp b10909) · โค้ด: `dvl/llamacpp.py` (`p_incident`, `gate_fires`, `abstain`), `api/app.py` (`classify_result`)
+  บน gold 247 ภาพ: miss 0.045 → 0.018 แลกกับภาพที่ต้องให้คนดู ~5–10%
+
+  ## Request
+  ```
+  POST {{baseUrl}}/v1/classify
+  ```
+  multipart field `image` = `fixtures/uncertain-no-incident.jpg` (`image/jpeg`) — รายละเอียดดู 01-Classify Incident Image
+
+  ## Response
+
+  ### 200 OK — ค่าเฉพาะของกรณีนี้
+  | Field | Value | Description |
+  |-------|-------|-------------|
+  | `incident_type` | `unsure` | ค่าหลังกติกา |
+  | `model_incident_type` | `no_incident` | คำตอบดิบ — ต่างจาก `incident_type` = กติกาทำงาน |
+  | `category` / `severity` | `other` / `mild` | ค่าที่กติกากำหนด |
+  | `confidence` | `1.0` | ของคำตอบดิบ `no_incident` (มั่นใจเกินจริง) |
+  | `p_incident` | `0.0001162` | ≥ `threshold` |
+  | `needs_review` / `review_reason` | `true` / `uncertain_no_incident` | |
+
+  `review_reason` อื่นที่ให้ `needs_review=true`: `model_unsure` (โมเดลตอบ `unsure` เอง — `model_incident_type` = `incident_type` = `unsure`) และ
+  `invalid_output` (คำตอบไม่ใช่ JSON ที่ถูกต้อง → `incident_type=unsure`, `model_incident_type=null`, `confidence=0.0`, `valid=false`) — ไม่มี fixture ที่ทำให้เกิดได้แน่นอน
+
+  ### Error Cases
+  เหมือน 01-Classify Incident Image
+
+  ## Testing Notes
+  - fixture = test_gold `fd5a1ada5004c085` (CrisisMMD) — หาจาก `runs/gguf/predictions-q4alts_gold.jsonl` (ภาพ gold ที่ตอบ no_incident และ p_incident ≥ T) แล้วยืนยันผ่าน API จริง
+  - p_incident ผ่าน API 1.162e-04 (สคริปต์ predict_gguf ได้ 1.35e-04) — สูงกว่า T ~3.6 เท่า · ถ้าเปลี่ยนโมเดล/quant/`DVL_ABSTAIN_T` เทสนี้อาจไม่ผ่าน ต้องหา fixture ใหม่
+}

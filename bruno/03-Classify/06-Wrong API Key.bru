@@ -1,0 +1,145 @@
+meta {
+  name: Wrong API Key
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/v1/classify
+  body: multipartForm
+  auth: none
+}
+
+body:multipart-form {
+  image: @file(fixtures/flood.jpg)
+}
+
+script:pre-request {
+  // 401 เกิดได้เฉพาะเมื่อ API เปิดด้วย DVL_API_KEY — ใช้ apiKey ของ environment เป็นธง: ไม่ได้ตั้ง = server ไม่มี key → ข้าม
+  if (!bru.getEnvVar("apiKey")) {
+    bru.runner.skipRequest();
+  } else {
+    // ทับ header ที่สคริปต์ของ collection ใส่ไว้ (สคริปต์ request รันหลัง collection)
+    req.setHeader("X-API-Key", "wrong-" + bru.getEnvVar("apiKey"));
+  }
+}
+
+tests {
+  test("Status is 401", function() {
+    expect(res.status).to.equal(401);
+  });
+
+  test("Error is unauthorized", function() {
+    expect(res.body).to.have.all.keys("error", "message");
+    expect(res.body.error).to.equal("unauthorized");
+    expect(res.body.message).to.equal("missing or wrong X-API-Key");
+  });
+}
+
+example {
+  name: 401 Unauthorized - Wrong Key
+  description: API เปิดด้วย DVL_API_KEY=secret123 · ส่ง X-API-Key: wrong-secret123
+
+  request: {
+    url: {{baseUrl}}/v1/classify
+    method: post
+    mode: multipartForm
+    headers: {
+      X-API-Key: wrong-secret123
+    }
+    body:multipart-form: {
+      image: @file(fixtures/flood.jpg)
+    }
+  }
+
+  response: {
+    status: {
+      code: 401
+      text: Unauthorized
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "error": "unauthorized",
+          "message": "missing or wrong X-API-Key"
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 401 Unauthorized - Missing Key
+  description: API เปิดด้วย DVL_API_KEY แต่คำขอไม่มี header X-API-Key
+
+  request: {
+    url: {{baseUrl}}/v1/classify
+    method: post
+    mode: multipartForm
+    body:multipart-form: {
+      image: @file(fixtures/flood.jpg)
+    }
+  }
+
+  response: {
+    status: {
+      code: 401
+      text: Unauthorized
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "error": "unauthorized",
+          "message": "missing or wrong X-API-Key"
+        }
+      '''
+    }
+  }
+}
+
+docs {
+  # Wrong API Key
+
+  ## Overview
+  เมื่อ API เปิดด้วย `DVL_API_KEY` ทุก `/v1/*` ต้องมี header `X-API-Key` ที่ตรงกัน (เทียบแบบ constant-time ด้วย `hmac.compare_digest`)
+  ไม่มี/ไม่ตรง → `401 unauthorized` — ตรวจก่อนอ่าน field `image` จึงไม่ถอดภาพและไม่เรียก llama-server · `/health` ไม่ตรวจ key
+
+  - **เกิดจริงเมื่อ:** ฝั่ง SOS ลืมตั้ง key / หมุน key ฝั่งเดียว
+  - ไม่ได้ตั้ง `DVL_API_KEY` (ค่าเริ่มต้น) → ไม่ตรวจ key เลย ส่ง header อะไรมาก็ผ่าน
+
+  ## Request
+  ```
+  POST {{baseUrl}}/v1/classify
+  X-API-Key: wrong-{{apiKey}}
+  ```
+  | Header | Value | Description |
+  |--------|-------|-------------|
+  | X-API-Key | `wrong-{{apiKey}}` | pre-request ตั้งทับ header ที่ collection ใส่ให้ |
+
+  body: field `image` = `fixtures/flood.jpg`
+
+  ## Response
+
+  ### 401 Unauthorized
+  | Field | Type | Description |
+  |-------|------|-------------|
+  | `error` | string | `unauthorized` |
+  | `message` | string | `missing or wrong X-API-Key` (ข้อความเดียวกันทั้งไม่มีและผิด) |
+
+  ### Error Cases
+  | Status | error | message | เกิดเมื่อ |
+  |--------|-------|---------|-----------|
+  | 401 | `unauthorized` | `missing or wrong X-API-Key` | ไม่มี header / ค่าไม่ตรง `DVL_API_KEY` |
+
+  ## Testing Notes
+  - **skip เมื่อไม่ได้ตั้ง `apiKey`** (ใช้ `apiKey` เป็นธงว่า server เปิด key) — ถ้าตั้ง `apiKey` แต่ server ไม่ได้เปิด `DVL_API_KEY` เทสนี้จะได้ 200 และไม่ผ่าน
+  - รันแบบมี key: `DVL_API_KEY=secret123 api/run.sh` แล้ว `bru run --env Local --env-var apiKey=secret123`
+}

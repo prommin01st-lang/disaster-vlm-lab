@@ -1,0 +1,131 @@
+meta {
+  name: Unsupported Media Type
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/v1/classify
+  body: multipartForm
+  auth: none
+}
+
+body:multipart-form {
+  image: @file(fixtures/sample.gif)
+}
+
+tests {
+  test("Status is 415", function() {
+    expect(res.status).to.equal(415);
+  });
+
+  test("Error is unsupported_media_type", function() {
+    expect(res.body).to.have.all.keys("error", "message");
+    expect(res.body.error).to.equal("unsupported_media_type");
+    expect(res.body.message).to.equal("content type image/gif not allowed (jpeg/png/webp)");
+  });
+}
+
+example {
+  name: 415 Unsupported Media Type - GIF Content Type
+  description: แนบ fixtures/sample.gif — Bruno ตั้ง content type ของ part เป็น image/gif จากนามสกุล
+
+  request: {
+    url: {{baseUrl}}/v1/classify
+    method: post
+    mode: multipartForm
+    body:multipart-form: {
+      image: @file(fixtures/sample.gif)
+    }
+  }
+
+  response: {
+    status: {
+      code: 415
+      text: Unsupported Media Type
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "error": "unsupported_media_type",
+          "message": "content type image/gif not allowed (jpeg/png/webp)"
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 415 Unsupported Media Type - GIF Declared as JPEG
+  description: แนบ fixtures/sample.gif แต่ประกาศ content type เป็น image/jpeg — ผ่านด่าน content type แต่ถูกตรวจจากเนื้อไฟล์
+
+  request: {
+    url: {{baseUrl}}/v1/classify
+    method: post
+    mode: multipartForm
+    body:multipart-form: {
+      image: @file(fixtures/sample.gif) @contentType(image/jpeg)
+    }
+  }
+
+  response: {
+    status: {
+      code: 415
+      text: Unsupported Media Type
+    }
+    headers: {
+      content-type: application/json
+    }
+    body: {
+      type: json
+      content: '''
+        {
+          "error": "unsupported_media_type",
+          "message": "image format GIF not allowed (jpeg/png/webp)"
+        }
+      '''
+    }
+  }
+}
+
+docs {
+  # Unsupported Media Type
+
+  ## Overview
+  รับเฉพาะ JPEG / PNG / WEBP — ตรวจ 2 ชั้น → `415 unsupported_media_type`:
+  1. content type ของ part `image` ต้องเป็น `image/jpeg`, `image/jpg`, `image/png` หรือ `image/webp` (ไม่สนพารามิเตอร์หลัง `;`, ไม่สนตัวพิมพ์)
+  2. รูปแบบจริงจาก header ของไฟล์ (PIL `img.format`) ต้องเป็น `JPEG` / `PNG` / `WEBP` — กันไฟล์ที่ประกาศชนิดไม่ตรงเนื้อ
+
+  - **เกิดจริงเมื่อ:** ส่ง GIF/HEIC/BMP/TIFF, หรือ client ไม่ตั้ง content type (`application/octet-stream`) — ฝั่ง SOS ต้องตั้ง `file.Headers.ContentType`
+
+  ## Request
+  ```
+  POST {{baseUrl}}/v1/classify
+  ```
+  | Field | Type | Description |
+  |-------|------|-------------|
+  | `image` | file | `fixtures/sample.gif` (GIF 8×8, 54 byte) |
+
+  ## Response
+
+  ### 415 Unsupported Media Type
+  | Field | Type | Description |
+  |-------|------|-------------|
+  | `error` | string | `unsupported_media_type` |
+  | `message` | string | ชั้น 1: `content type <type> not allowed (jpeg/png/webp)` (`?` ถ้าไม่มี) · ชั้น 2: `image format <FMT> not allowed (jpeg/png/webp)` |
+
+  ### Error Cases
+  | Status | error | message | เกิดเมื่อ |
+  |--------|-------|---------|-----------|
+  | 415 | `unsupported_media_type` | `content type image/gif not allowed (jpeg/png/webp)` | content type ของ part ไม่อยู่ในรายการ |
+  | 415 | `unsupported_media_type` | `content type application/octet-stream not allowed (jpeg/png/webp)` | client ไม่ตั้ง content type |
+  | 415 | `unsupported_media_type` | `image format GIF not allowed (jpeg/png/webp)` | ประกาศถูกแต่เนื้อไฟล์เป็นรูปแบบอื่น |
+  | 400 | `undecodable_image` | `cannot decode image: ...` | เนื้อไฟล์ไม่ใช่ภาพเลย — ดู 05 |
+
+  ## Testing Notes
+  - live request ทดสอบชั้น 1 · example ที่สองทดสอบชั้น 2 ด้วย `@contentType(image/jpeg)` (เปลี่ยน body เป็นแบบนั้นเพื่อลองเอง)
+}

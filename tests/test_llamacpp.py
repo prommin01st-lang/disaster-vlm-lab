@@ -2,7 +2,7 @@ import base64, io, math
 
 from PIL import Image
 
-from dvl.llamacpp import (abstain, gate_fires, jpeg_data_url, p_incident, request_body, to_openai,
+from dvl.llamacpp import (abstain, gate_fires, p_incident, png_data_url, request_body, to_openai,
                           value_alternatives)
 from dvl.prompt import build_messages
 
@@ -23,11 +23,13 @@ def test_request_body_uses_data_url():
     assert body["top_logprobs"] == 5
 
 
-def test_jpeg_data_url_roundtrip():
-    url = jpeg_data_url(Image.new("RGB", (40, 30), (200, 10, 10)))
-    assert url.startswith("data:image/jpeg;base64,")
+def test_png_data_url_roundtrip_lossless():
+    src = Image.new("RGB", (40, 30), (200, 10, 10))
+    src.putpixel((3, 4), (1, 2, 3))
+    url = png_data_url(src)
+    assert url.startswith("data:image/png;base64,")
     img = Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1])))
-    assert img.format == "JPEG" and img.size == (40, 30)
+    assert img.format == "PNG" and img.tobytes() == src.tobytes()
 
 
 def test_value_alternatives_first_token_of_value():

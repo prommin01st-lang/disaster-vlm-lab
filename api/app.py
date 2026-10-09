@@ -1,9 +1,9 @@
 """HTTP API: ส่งภาพ 1 ภาพ → JSON เหตุ + needs_review — ห่อ llama-server (GGUF Q4_K_M) บนเครื่อง
 รัน: api/run.sh (เปิด llama-server + uvicorn) · ดู README "HTTP API" สำหรับ key ของคำตอบและตัวแปร env
 
-ขั้นตอน: ตรวจไฟล์ → to_rgb_resized(512) (เหมือนตอนสร้าง dataset) → JPEG data URL → dvl.prompt.build_messages
+ขั้นตอน: ตรวจไฟล์ (≤10 MB, ≤40 MP) → to_rgb_resized(512) (เหมือนตอนสร้าง dataset) → PNG data URL (lossless) → dvl.prompt.build_messages
 → llama-server (ทีละคำขอ เพราะเปิด -np 1) → parse_output → กติกา abstain (no_incident ที่ P(เป็นเหตุ) >= T → unsure)"""
-import asyncio, hmac, io, os, time
+import asyncio, hmac, io, json, os, time, warnings
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -14,12 +14,18 @@ from PIL import Image
 
 from dvl.catalog import ALLOWED_TYPES
 from dvl.imgutil import to_rgb_resized
-from dvl.llamacpp import abstain, gate_fires, jpeg_data_url, p_incident, parse_response, request_body, \
+from dvl.llamacpp import abstain, gate_fires, p_incident, png_data_url, parse_response, request_body, \
     response_logprobs, value_alternatives
 from dvl.prompt import build_messages
 from dvl.schema import parse_output, to_api
 
 MAX_BYTES = 10 * 1024 * 1024
+MAX_BODY = MAX_BYTES + 64 * 1024  # เผื่อ overhead ของ multipart
+MAX_PIXELS = 40_000_000  # กัน decompression bomb: PNG 1-bit ไม่กี่ร้อย byte ประกาศ 20000×20000 ได้
+Image.MAX_IMAGE_PIXELS = MAX_PIXELS  # PIL raise แทน warn (เกิน 2× จะ raise DecompressionBombError)
+# 1×–2× cap PIL แค่ warn — _decode ตรวจ w*h เองแล้ว จึงปิด warning นี้ (เกิน 2× PIL raise → 413)
+warnings.filterwarnings("ignore", category=Image.DecompressionBombWarning)
+DECODE_CONCURRENCY = 2  # ถอดภาพพร้อมกันได้กี่ภาพ (CPU/RAM)
 ALLOWED_MIME = {"image/jpeg": "JPEG", "image/jpg": "JPEG", "image/png": "PNG", "image/webp": "WEBP"}
 DEFAULT_T = 3.2e-5  # เลือกบน val สำหรับ Q4_K_M + llama.cpp b10909 (reports/abstain-q4.md)
 
@@ -48,18 +54,75 @@ class ApiError(Exception):
 
 
 def _decode(data: bytes) -> Image.Image:
-    """bytes → ภาพ RGB ≤512 — ApiError ถ้าไม่ใช่ jpeg/png/webp หรือถอดรหัสไม่ได้"""
+    """bytes → ภาพ RGB ≤512 — ApiError ถ้าไม่ใช่ jpeg/png/webp, เกิน MAX_PIXELS หรือถอดรหัสไม่ได้"""
     try:
-        img = Image.open(io.BytesIO(data))
+        img = Image.open(io.BytesIO(data))  # อ่านแค่ header
         fmt = img.format
         if fmt not in ALLOWED_MIME.values():
             raise ApiError(415, "unsupported_media_type", f"image format {fmt} not allowed (jpeg/png/webp)")
+        w, h = img.size
+        if w * h > MAX_PIXELS:
+            raise ApiError(413, "too_many_pixels", f"image {w}x{h} exceeds {MAX_PIXELS} pixels")
+        if fmt == "JPEG":
+            img.draft("RGB", (1024, 1024))  # ถอดแบบย่อ 1/2–1/8 ตั้งแต่ DCT (ยังใหญ่กว่า 512 ให้ LANCZOS ย่อต่อ)
         img.load()
         return to_rgb_resized(img, max_side=512)
     except ApiError:
         raise
-    except Exception as ex:  # PIL โยนได้หลายแบบ (UnidentifiedImageError, OSError, DecompressionBombError, ...)
+    except Image.DecompressionBombError as ex:
+        raise ApiError(413, "too_many_pixels", f"image exceeds {MAX_PIXELS} pixels") from ex
+    except Exception as ex:  # PIL โยนได้หลายแบบ (UnidentifiedImageError, OSError, SyntaxError, ...)
         raise ApiError(400, "undecodable_image", f"cannot decode image: {type(ex).__name__}") from ex
+
+
+class BodyLimit:
+    """ASGI middleware: จำกัดขนาด body ทั้งจาก Content-Length และจากการนับ byte ระหว่างอ่าน (chunked ไม่มี header)
+    เกิน → 413 too_large และหยุดอ่าน body ทันที (multipart parser ไม่ได้ spool ต่อ)"""
+
+    def __init__(self, app, limit: int):
+        self.app, self.limit = app, limit
+
+    async def _reject(self, send):
+        body = json.dumps({"error": "too_large", "message": f"image larger than {MAX_BYTES} bytes"},
+                          separators=(",", ":")).encode()
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        size = dict(scope["headers"]).get(b"content-length", b"")
+        if size.isdigit() and int(size) > self.limit:
+            return await self._reject(send)
+        seen, over, started = 0, False, False
+
+        async def limited_receive():
+            nonlocal seen, over
+            if over:
+                return {"type": "http.disconnect"}
+            msg = await receive()
+            if msg["type"] == "http.request":
+                seen += len(msg.get("body", b""))
+                if seen > self.limit:
+                    over = True
+                    return {"type": "http.disconnect"}  # แอปเลิกอ่าน (ClientDisconnect)
+            return msg
+
+        async def guarded_send(msg):
+            nonlocal started
+            if over:
+                return  # ทิ้งคำตอบของแอป (เช่น 400 parse error) — จะส่ง 413 แทน
+            started = started or msg["type"] == "http.response.start"
+            await send(msg)
+
+        try:
+            await self.app(scope, limited_receive, guarded_send)
+        except Exception:
+            if not over:
+                raise
+        if over and not started:
+            await self._reject(send)
 
 
 def classify_result(resp: dict, t: float) -> dict:
@@ -78,7 +141,8 @@ def classify_result(resp: dict, t: float) -> dict:
         reason = "model_unsure"
     else:
         reason = None
-    return {"category": final["category"], "incident_type": final["incident_type"], "severity": final["severity"],
+    return {"category": final["category"], "incident_type": final["incident_type"],
+            "model_incident_type": p.incident_type if p.valid else None, "severity": final["severity"],
             "confidence": final["confidence"], "p_incident": round(p_incident(pred), 8),
             "needs_review": reason is not None, "review_reason": reason,
             "incident_type_name_th": ALLOWED_TYPES.get(final["incident_type"], (None, None))[1], "valid": p.valid}
@@ -88,6 +152,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     s = settings or Settings.from_env()
     state: dict = {"client": None}
     lock = asyncio.Lock()  # llama-server เปิด -np 1 → ส่งทีละคำขอ
+    decode_slots = asyncio.Semaphore(DECODE_CONCURRENCY)
 
     def llama() -> httpx.AsyncClient:
         if state["client"] is None:
@@ -106,14 +171,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     async def _api_error(_req: Request, ex: ApiError):
         return JSONResponse({"error": ex.error, "message": ex.message}, status_code=ex.status)
 
-    @app.middleware("http")
-    async def _limit_body(request: Request, call_next):
-        # ตัดคำขอใหญ่เกินตั้งแต่ header ก่อน multipart parser จะเขียนลงดิสก์ (เผื่อ overhead ของ multipart 64 KB)
-        size = request.headers.get("content-length", "")
-        if size.isdigit() and int(size) > MAX_BYTES + 64 * 1024:
-            return JSONResponse({"error": "too_large", "message": f"image larger than {MAX_BYTES} bytes"},
-                                status_code=413)
-        return await call_next(request)
+    app.add_middleware(BodyLimit, limit=MAX_BODY)
 
     def require_key(request: Request) -> None:
         if s.api_key and not hmac.compare_digest(request.headers.get("x-api-key", "").encode(), s.api_key.encode()):
@@ -145,8 +203,9 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         data = await image.read(MAX_BYTES + 1)
         if len(data) > MAX_BYTES:
             raise ApiError(413, "too_large", f"image larger than {MAX_BYTES} bytes")
-        img = await asyncio.to_thread(_decode, data)
-        body = request_body(build_messages(await asyncio.to_thread(jpeg_data_url, img)))
+        async with decode_slots:
+            url = await asyncio.to_thread(lambda: png_data_url(_decode(data)))
+        body = request_body(build_messages(url))
         async with lock:
             try:
                 r = await llama().post("/v1/chat/completions", json=body)

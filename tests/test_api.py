@@ -12,7 +12,7 @@ with warnings.catch_warnings():  # starlette 1.7: "Using httpx with starlette.te
 from api.app import Settings, create_app
 from dvl.prompt import SYSTEM_PROMPT
 
-KEYS = {"category", "incident_type", "severity", "confidence", "p_incident", "needs_review", "review_reason",
+KEYS = {"category", "incident_type", "model_incident_type", "severity", "confidence", "p_incident", "needs_review", "review_reason",
         "incident_type_name_th", "valid", "model", "threshold", "latency_ms"}
 
 
@@ -75,7 +75,7 @@ def test_happy_path_incident_and_preprocessing():
     assert set(j) == KEYS
     assert (j["category"], j["incident_type"], j["severity"]) == ("fire_hazard", "forest_fire", "severe")
     assert j["needs_review"] is False and j["review_reason"] is None and j["valid"] is True
-    assert j["incident_type_name_th"] == "ไฟป่า"
+    assert j["incident_type_name_th"] == "ไฟป่า" and j["model_incident_type"] == "forest_fire"
     assert math.isclose(j["confidence"], 0.98, abs_tol=1e-3)  # 0.99 * 0.99 (forest, _fire)
     assert j["p_incident"] == 1.0 and j["model"] == "dvl-test" and j["threshold"] == 3.2e-5
     assert isinstance(j["latency_ms"], int)
@@ -83,9 +83,9 @@ def test_happy_path_incident_and_preprocessing():
     sys_msg, user = fake.bodies[0]["messages"]
     assert sys_msg["content"][0]["text"] == SYSTEM_PROMPT
     url = user["content"][0]["image_url"]["url"]
-    assert url.startswith("data:image/jpeg;base64,")
+    assert url.startswith("data:image/png;base64,")
     img = Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1])))
-    assert img.format == "JPEG" and img.mode == "RGB" and img.size == (512, 300)
+    assert img.format == "PNG" and img.mode == "RGB" and img.size == (512, 300)
     assert fake.bodies[0]["temperature"] == 0 and fake.bodies[0]["chat_template_kwargs"] == {"enable_thinking": False}
 
 
@@ -117,7 +117,7 @@ def test_invalid_model_output():
     j = post_img(client(FakeLlama(chat))).json()
     assert j["valid"] is False and j["incident_type"] == "unsure"
     assert j["needs_review"] is True and j["review_reason"] == "invalid_output"
-    assert j["confidence"] == 0.0
+    assert j["confidence"] == 0.0 and j["model_incident_type"] is None
 
 
 @pytest.mark.parametrize("ctype,data,status,code", [
@@ -236,3 +236,109 @@ def test_llama_calls_are_serialized():
 
     assert asyncio.run(run()) == [200] * 4
     assert state["max"] == 1
+
+
+def _png_header_only(w: int, h: int) -> bytes:
+    """PNG ที่ประกาศขนาด w×h (1-bit) แต่ IDAT เล็กมาก — ไฟล์ไม่กี่ร้อย byte"""
+    import struct, zlib
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 1, 0, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"\x00" * 64)) + chunk(b"IEND", b""))
+
+
+@pytest.mark.filterwarnings("ignore::PIL.Image.DecompressionBombWarning")  # app ปิด warning นี้ แต่ pytest reset filter
+@pytest.mark.parametrize("w,h", [(20000, 20000), (8000, 6000), (100000, 100000)])
+def test_too_many_pixels_rejected_before_decode(w, h):
+    fake = FakeLlama(_chat(FIRE, [("fire", 1.0)]))
+    data = _png_header_only(w, h)
+    assert len(data) < 1000
+    r = post_img(client(fake), data, "image/png")
+    assert r.status_code == 413 and r.json()["error"] == "too_many_pixels"
+    assert fake.bodies == []
+
+
+def test_large_jpeg_is_draft_decoded_and_resized():
+    buf = io.BytesIO()
+    Image.new("RGB", (4000, 3000), (30, 60, 90)).save(buf, format="JPEG")
+    fake = FakeLlama(_chat(FIRE, [("fire", 1.0)]))
+    assert post_img(client(fake), buf.getvalue(), "image/jpeg").status_code == 200
+    url = fake.bodies[0]["messages"][1]["content"][0]["image_url"]["url"]
+    assert Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))).size == (512, 384)
+
+
+def _chunked_multipart(total: int):
+    b = b"BOUNDARY"
+    yield b"--" + b + b'\r\nContent-Disposition: form-data; name="image"; filename="x.jpg"\r\nContent-Type: image/jpeg\r\n\r\n'
+    sent = 0
+    while sent < total:
+        yield b"\xff" * 1024 * 1024
+        sent += 1024 * 1024
+    yield b"\r\n--" + b + b"--\r\n"
+
+
+def test_chunked_body_over_limit_rejected():
+    fake = FakeLlama(_chat(FIRE, [("fire", 1.0)]))
+    r = client(fake).post("/v1/classify", content=_chunked_multipart(40 * 1024 * 1024),
+                          headers={"Content-Type": "multipart/form-data; boundary=BOUNDARY"})
+    assert "content-length" not in {k.lower() for k in r.request.headers}
+    assert r.status_code == 413 and r.json()["error"] == "too_large"
+    assert fake.bodies == []
+
+
+def test_chunked_body_under_limit_ok():
+    fake = FakeLlama(_chat(FIRE, [("fire", 1.0)]))
+    png = _png()
+
+    def gen():
+        yield b'--B\r\nContent-Disposition: form-data; name="image"; filename="x.png"\r\nContent-Type: image/png\r\n\r\n'
+        yield png
+        yield b"\r\n--B--\r\n"
+    r = client(fake).post("/v1/classify", content=gen(), headers={"Content-Type": "multipart/form-data; boundary=B"})
+    assert r.status_code == 200, r.text
+
+
+def test_streamed_body_limit_stops_reading_early():
+    """ASGI ตรง ๆ: body ไม่มี Content-Length ถูกนับระหว่างอ่าน → 413 และหยุดดึง body ก่อนอ่านหมด"""
+    app = create_app(Settings(llama_url="http://l"), transport=httpx.MockTransport(FakeLlama()))
+    chunk, pulled, sent = b"\xff" * (1024 * 1024), [0], []
+    head = b'--B\r\nContent-Disposition: form-data; name="image"; filename="x.jpg"\r\nContent-Type: image/jpeg\r\n\r\n'
+
+    async def receive():
+        pulled[0] += 1
+        body = head if pulled[0] == 1 else chunk
+        return {"type": "http.request", "body": body, "more_body": pulled[0] < 200}  # ~200 MB ถ้าอ่านหมด
+
+    async def send(msg):
+        sent.append(msg)
+
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http",
+             "path": "/v1/classify", "raw_path": b"/v1/classify", "query_string": b"", "root_path": "",
+             "headers": [(b"content-type", b"multipart/form-data; boundary=B"), (b"host", b"api")],
+             "client": ("127.0.0.1", 1), "server": ("api", 80)}
+    asyncio.run(app(scope, receive, send))
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    assert start["status"] == 413 and json.loads(body)["error"] == "too_large"
+    assert pulled[0] <= 13  # 10 MB + 64 KB แล้วหยุด
+
+
+def test_png_sent_lossless_and_model_answer_exposed():
+    src = Image.new("RGB", (300, 200))
+    src.putdata([(x % 256, y % 256, (x * y) % 256) for y in range(200) for x in range(300)])
+    buf = io.BytesIO()
+    src.save(buf, format="JPEG", quality=90)
+    decoded = Image.open(io.BytesIO(buf.getvalue())).convert("RGB")
+    fake = FakeLlama(_chat(NO_INCIDENT, [("null", 0.999), (' "', 0.001)]))
+    j = post_img(client(fake), buf.getvalue(), "image/jpeg").json()
+    url = fake.bodies[0]["messages"][1]["content"][0]["image_url"]["url"]
+    assert url.startswith("data:image/png;base64,")
+    sent_img = Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1])))
+    assert sent_img.tobytes() == decoded.tobytes()  # pixel เดียวกับที่ถอดจาก JPEG ต้นฉบับ
+    assert j["incident_type"] == "unsure" and j["model_incident_type"] == "no_incident"
+
+
+def test_decodes_are_bounded():
+    import api.app as m
+    assert m.DECODE_CONCURRENCY == 2

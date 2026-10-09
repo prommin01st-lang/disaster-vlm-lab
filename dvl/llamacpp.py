@@ -8,10 +8,11 @@ from PIL import Image
 from dvl.confidence import span_confidence
 
 
-def jpeg_data_url(img: Image.Image, quality: int = 95) -> str:
+def png_data_url(img: Image.Image) -> str:
+    """lossless — pixel ที่ส่งตรงกับที่ถอดได้ (encode JPEG ซ้ำอีกรอบทำให้คำตอบเปลี่ยน ~5% บน gold)"""
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=quality)
-    return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
+    img.save(buf, format="PNG", compress_level=1)
+    return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
 
 def _image_url(image) -> str:

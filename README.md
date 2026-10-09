@@ -288,17 +288,22 @@ api/run.sh   # เปิด llama-server :8091 (log ใน runs/) ถ้าย�
 
 | method | path | ทำอะไร |
 |---|---|---|
-| `POST` | `/v1/classify` | multipart field `image` (jpeg/png/webp ≤ 10 MB) → ผลจำแนก |
+| `POST` | `/v1/classify` | multipart field `image` (jpeg/png/webp ≤ 10 MB และ ≤ 40 ล้าน pixel) → ผลจำแนก |
 | `GET` | `/v1/labels` | `incident_type` ทั้ง 14 ค่าที่โมเดลตอบได้ + `category` + `name_th` (จาก `dvl/catalog.py`) |
 | `GET` | `/health` | 200 เมื่อ llama-server `/health` ok · ไม่งั้น 503 (กำลังโหลดโมเดล/ไม่ได้เปิด) · ไม่ต้องใช้ key |
 
-ภาพที่ส่งมาถูกแปลงด้วย `to_rgb_resized(512)` (หมุนตาม EXIF, RGBA → พื้นขาว, ด้านยาว ≤ 512 แบบเดียวกับตอนสร้าง dataset) → JPEG q95 → llama-server
-คำขอไป llama-server เข้าคิวทีละคำขอ (server เปิด `-np 1`) — ส่งพร้อมกันได้แต่จะรอคิว
+ภาพที่ส่งมาถูกแปลงด้วย `to_rgb_resized(512)` (หมุนตาม EXIF, RGBA → พื้นขาว, ด้านยาว ≤ 512 แบบเดียวกับตอนสร้าง dataset) → **PNG (lossless)** → llama-server
+(ไม่ encode JPEG ซ้ำ: JPEG รอบสองทำให้คำตอบเปลี่ยน ~5% บน gold — PNG ส่ง pixel เดียวกับที่ถอดจากไฟล์ต้นฉบับ)
+คำขอไป llama-server เข้าคิวทีละคำขอ (server เปิด `-np 1`) — ส่งพร้อมกันได้แต่จะรอคิว · ถอดภาพพร้อมกันได้ 2 ภาพ
+
+กันคำขอกิน RAM/ดิสก์: body ทั้งคำขอ ≤ 10 MB + 64 KB (นับระหว่างอ่าน ใช้ได้กับ chunked ที่ไม่มี Content-Length) ·
+ภาพที่ header ประกาศเกิน 40 ล้าน pixel ถูกปฏิเสธก่อนถอด (`413 too_many_pixels`) · JPEG ถอดแบบย่อ (draft ≥ 1024) ก่อนย่อเหลือ 512
 
 ### คำตอบ (key คงที่)
 
 ```json
-{"category": null, "incident_type": "no_incident", "severity": "none", "confidence": 1.0,
+{"category": null, "incident_type": "no_incident", "model_incident_type": "no_incident",
+ "severity": "none", "confidence": 1.0,
  "p_incident": 3.32e-06, "needs_review": false, "review_reason": null,
  "incident_type_name_th": "ไม่ใช่เหตุ", "valid": true, "model": "dvl-qwen3.5-2b-Q4_K_M",
  "threshold": 3.2e-05, "latency_ms": 818}
@@ -308,8 +313,9 @@ api/run.sh   # เปิด llama-server :8091 (log ใน runs/) ถ้าย�
 |---|---|
 | `category` | หมวดใน SOS catalog (`fire_hazard`, `disaster`, `rescue`, `accident`, `other`) · `null` เมื่อ `no_incident` |
 | `incident_type` | ค่า **หลัง** ใช้กติกา abstain — หนึ่งใน `/v1/labels` (`no_incident` ไม่มีใน SOS = ไม่ต้องสร้างเหตุ) |
+| `model_incident_type` | คำตอบดิบของโมเดล **ก่อน** กติกา abstain (ต่างจาก `incident_type` เมื่อ `review_reason = uncertain_no_incident`) · `null` เมื่อคำตอบพัง |
 | `severity` | `none` (เฉพาะ no_incident) / `mild` / `severe` |
-| `confidence` | ความน่าจะเป็นของ token ค่า incident_type ที่โมเดลตอบ (0–1 ปัด 3 ตำแหน่ง; 0.0 ถ้าคำตอบพัง) — มั่นใจเกินจริง อย่าใช้แทน `needs_review` |
+| `confidence` | ความน่าจะเป็นของ token ค่า incident_type ที่โมเดลตอบ — อ้างถึง `model_incident_type` (คำตอบดิบ) ไม่ใช่ค่าหลังกติกา (0–1 ปัด 3 ตำแหน่ง; 0.0 ถ้าคำตอบพัง) — มั่นใจเกินจริง อย่าใช้แทน `needs_review` |
 | `p_incident` | P(เป็นเหตุ) = 1 − P(category = null) — ค่าที่กติกา abstain ใช้ |
 | `needs_review` | `true` = ต้องให้คนดูก่อนเชื่อผล |
 | `review_reason` | `null` · `uncertain_no_incident` (โมเดลตอบ no_incident แต่ `p_incident ≥ threshold` → เปลี่ยนเป็น `unsure`/`other`/`mild`) · `model_unsure` (โมเดลตอบ `unsure` เอง) · `invalid_output` (คำตอบไม่ใช่ JSON ที่ถูกต้อง → `unsure`, `valid=false`) |
@@ -322,7 +328,7 @@ api/run.sh   # เปิด llama-server :8091 (log ใน runs/) ถ้าย�
 (gold: miss 0.045 → 0.018 แลกกับ ~5–10% ของภาพที่ต้องดู) ฝั่ง SOS ควรถือ `needs_review=true` = "อาจเป็นเหตุ ให้เจ้าหน้าที่ยืนยัน" ไม่ใช่ทิ้ง
 
 Error เป็น JSON `{"error": "<code>", "message": "..."}`:
-`400 missing_image / undecodable_image` · `401 unauthorized` · `413 too_large` · `415 unsupported_media_type` (ตรวจทั้ง content-type และเนื้อไฟล์)
+`400 missing_image / undecodable_image` · `401 unauthorized` · `413 too_large / too_many_pixels` · `415 unsupported_media_type` (ตรวจทั้ง content-type และเนื้อไฟล์)
 · `502 llama_unreachable / llama_error` · `504 llama_timeout`
 
 ### ตัวแปร env
@@ -345,7 +351,8 @@ curl -s http://127.0.0.1:8092/health
 curl -s -H "X-API-Key: $DVL_API_KEY" -F "image=@photo.jpg" http://127.0.0.1:8092/v1/classify
 ```
 
-เรียกจาก ASP.NET Core (`HttpClient` จาก `IHttpClientFactory`; timeout ควรมากกว่า `DVL_TIMEOUT` เพราะคำขออาจรอคิว):
+เรียกจาก ASP.NET Core (`HttpClient` จาก `IHttpClientFactory`) — **`HttpClient.Timeout` ต้องมากกว่า `DVL_TIMEOUT` + เวลารอคิว**:
+`DVL_TIMEOUT` นับเฉพาะตอนรอ llama-server ไม่นับเวลารอคิว (คำขอละ ~0.5 s × จำนวนคำขอที่รออยู่ก่อนหน้า) เช่นตั้ง 120 s:
 
 ```csharp
 using var form = new MultipartFormDataContent();
@@ -363,18 +370,19 @@ var result = await res.Content.ReadFromJsonAsync<ClassifyResult>(
 
 ### ตรวจจริงบนเครื่อง (gold 247 ภาพ ผ่าน `api/run.sh`)
 
-| | API (re-encode JPEG q95) | `predict_gguf.py` + กติกา (ส่งไฟล์ดิบ) |
-|---|---|---|
-| incident_type ตรงกัน | 234/247 (94.7%) | – |
-| ตอบถูกตาม gold | 192 | 191 |
-| miss (เหตุจริง → no_incident) | 3/222 | 4/222 |
-| false alarm (no_incident → เหตุ) | 2/25 | 2/25 |
-| ส่งให้คนดู | 14 | 13 |
+| | API (PNG lossless) | API (รอบแรก, JPEG q95) | `predict_gguf.py` + กติกา (ส่งไฟล์ดิบ) |
+|---|---|---|---|
+| incident_type ตรงกับสคริปต์ | 240/247 (97.2%) | 234/247 (94.7%) | – |
+| ตอบถูกตาม gold | 196 | 192 | 191 |
+| miss (เหตุจริง → no_incident) | 4/222 | 3/222 | 4/222 |
+| false alarm (no_incident → เหตุ) | 2/25 | 2/25 | 2/25 |
+| ส่งให้คนดู (gate) | 11 | 14 | 13 |
+| latency p50 / p90 / max (ms) | 503 / 553 / 926 | 444 / 490 / 792 | – |
 
-ต่างกัน 13 ภาพ: 11 ภาพเกิดจากการ encode JPEG ซ้ำ (ส่งไฟล์ดิบเข้า llama-server ตอนนี้ได้ผลเดิมของสคริปต์ ส่งแบบ re-encode ได้ผลเดียวกับ API),
-1 ภาพ p_incident ขยับข้าม T (2.8e-5 → 5.2e-5) จาก re-encode เช่นกัน, 1 ภาพไฟล์ดิบเองตอบต่างจากรอบที่สคริปต์รัน (ไม่ deterministic ข้ามรอบ server)
-— โมเดลไวต่อ artifact ของ JPEG; ลองส่งเป็น PNG (lossless) แทน ตรงกับสคริปต์ 240/247 ถูก 196
-· latency p50 444 ms / p90 490 ms / max 792 ms · VRAM peak 2531 MiB (ทั้งการ์ด)
+PNG: ต่างจากสคริปต์ 7 ภาพ ทุกภาพเป็นเหตุจริงที่ API ตอบเป็นเหตุ (2 ภาพที่สคริปต์ตอบ no_incident แล้ว gate ส่งคนดู API ตอบเหตุตรง ๆ, อีก 5 ภาพสลับประเภทเหตุ)
+— pixel เท่ากับไฟล์ดิบ ส่วนที่ต่างน่าจะมาจากตัวถอด JPEG ต่างกัน (PIL vs stb_image ใน llama.cpp) และ server ไม่ deterministic ข้ามรอบ
+(รอบ JPEG: 11/13 ภาพที่ต่างเกิดจาก encode ซ้ำ ยืนยันโดยส่งไฟล์ดิบ vs re-encode ตรงเข้า llama-server)
+· PNG ช้ากว่า ~60 ms/ภาพ (encode + payload ใหญ่ขึ้น) · VRAM peak 2579 MiB (ทั้งการ์ด)
 
 ## ข้อจำกัด
 

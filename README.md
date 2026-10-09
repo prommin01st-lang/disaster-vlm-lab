@@ -15,6 +15,7 @@ accident — `vehicle_collision` · เพิ่ม `unsure` (other) และ `
 | | |
 |---|---|
 | รายงานโมเดล (ผลประเมิน ข้อจำกัด บทเรียน) | [`REPORT.md`](REPORT.md) |
+| Requirement spec (FR/NFR, API contract, acceptance criteria) | [`docs/requirements-spec.md`](docs/requirements-spec.md) |
 | LoRA adapter (checkpoint-700) | [Petanque/dvl-qwen35-2b-lora](https://huggingface.co/Petanque/dvl-qwen35-2b-lora) — **private** |
 | GGUF Q4_K_M / Q8_0 + mmproj (สำหรับ llama.cpp) | [Petanque/dvl-qwen3.5-2b-gguf](https://huggingface.co/Petanque/dvl-qwen3.5-2b-gguf) — **private** |
 | HTTP API / Docker / Bruno | หัวข้อ [HTTP API](#http-api), [Docker](#docker) และโฟลเดอร์ [`bruno/`](bruno/) |

@@ -10,6 +10,18 @@ Fine-tune **Qwen3.5-2B** (VLM) ด้วย LoRA ให้ดูภาพแจ�
 disaster — `flood`, `storm`, `landslide`, `damaged_structure`, `road_hazard` · rescue — `building_collapse`, `water_rescue` ·
 accident — `vehicle_collision` · เพิ่ม `unsure` (other) และ `no_incident` (category `null`)
 
+## โมเดลและเอกสาร
+
+| | |
+|---|---|
+| รายงานโมเดล (ผลประเมิน ข้อจำกัด บทเรียน) | [`REPORT.md`](REPORT.md) |
+| LoRA adapter (checkpoint-700) | [Petanque/dvl-qwen35-2b-lora](https://huggingface.co/Petanque/dvl-qwen35-2b-lora) — **private** |
+| GGUF Q4_K_M / Q8_0 + mmproj (สำหรับ llama.cpp) | [Petanque/dvl-qwen3.5-2b-gguf](https://huggingface.co/Petanque/dvl-qwen3.5-2b-gguf) — **private** |
+| HTTP API / Docker / Bruno | หัวข้อ [HTTP API](#http-api), [Docker](#docker) และโฟลเดอร์ [`bruno/`](bruno/) |
+
+โมเดลบน Hugging Face เป็น private (ข้อมูลเทรนมีไลเซนส์ non-commercial) — ลิงก์จะเปิดได้เฉพาะคนที่ได้รับสิทธิ์
+repo นี้ไม่แจกจ่ายภาพจาก dataset ภาพตัวอย่างของ Bruno ต้องดึงเองด้วย `bruno/fetch_fixtures.py`
+
 ## วิธีรัน
 
 ทุกงานโมเดลรันผ่าน `colab/run_job.sh <job.sh> [GPU] [timeout_min]` (bundle → bootstrap → launch → poll → ดึง `out/` มาที่ `runs/dvl-<job>-<เวลา>/` → `colab stop` เสมอ) ·
@@ -259,7 +271,7 @@ reference on the same set (`lora_v1`) is needed to measure quantization loss dir
 | test ไม่รวม gold 2997 | ปิด → เปิด | 0.724 → 0.715 | 0.130 → 0.130 | 0.031 → **0.003** | 0.1% → 10.4% |
 
 เทียบเกณฑ์กับ base: miss ไม่สูงกว่า base แล้ว (gold 0.018 = 0.018, test 0.003 < 0.007) และ false alarm ยังต่ำกว่า base 3–6 เท่า
-ราคา: ~10% ของภาพถูกส่งให้คนดู — บน test 310 ภาพ เป็นเหตุจริง 17 (storm 7, road_hazard 4, …) ที่เหลือ 293 ไม่ใช่เหตุ
+ราคา: ~10% ของภาพถูกส่งให้คนดู — บน test (ไม่รวม gold) มี `unsure` 311 ภาพ = gate เปลี่ยน 308 (เหตุจริง 17: storm 7, road_hazard 4, … · ไม่ใช่เหตุ 291) + โมเดลตอบ `unsure` เอง 3
 ข้อจำกัด: T ผูกกับไฟล์ Q4_K_M + llama.cpp b10909 (Q8_0/bf16 ต้อง sweep ใหม่) · ค่า T เล็กมาก (ระดับ 1e-5) เพราะโมเดลมั่นใจเกินจริง
 · logprob มาจาก top-5 เท่านั้น — ถ้า `null` หลุด top-5 จะนับเป็นเหตุ (ปลอดภัย = ส่งให้คนดู)
 

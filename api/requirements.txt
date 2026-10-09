@@ -1,0 +1,6 @@
+# HTTP API (api/app.py) — ติดตั้งลง venv กลาง: ../iron-coach-th/.venv/bin/pip install -r api/requirements.txt
+fastapi==0.143.0
+uvicorn==0.54.0
+python-multipart==0.0.32
+httpx==0.28.1
+pillow==12.3.0

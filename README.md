@@ -267,6 +267,115 @@ reference on the same set (`lora_v1`) is needed to measure quantization loss dir
 
 **CU ที่ใช้ (Task 12):** เทรนรวม smoke ≈ 5.8 CU, predict lora_v1 ≈ 2.7 CU (รวมรอบที่ connection หลุดตอน bootstrap ~0.4 CU) — L4 ≈ 1.54 CU/ชม.
 
+## HTTP API
+
+API บนเครื่องให้ระบบ SOS (ASP.NET Core) เรียก: ส่งภาพ 1 ภาพ → ได้ JSON เหตุ + ธง `needs_review`
+ห่อ llama-server (GGUF **Q4_K_M** + mmproj) และใช้กติกา abstain ข้างบน (T = 3.2e-5) ทุกครั้ง — โค้ดอยู่ที่ `api/app.py`
+(client ของ llama.cpp + กติกา abstain อยู่ที่ `dvl/llamacpp.py` ใช้ร่วมกับ `scripts/predict_gguf.py` / `abstain_sweep.py`)
+
+### เปิดใช้งาน
+
+```bash
+../iron-coach-th/.venv/bin/pip install -r api/requirements.txt   # ครั้งแรก
+api/run.sh   # เปิด llama-server :8091 (log ใน runs/) ถ้ายังไม่ healthy → รอ /health → uvicorn :8092
+             # Ctrl+C ปิดทั้ง uvicorn และ llama-server ที่สคริปต์เปิดเอง (ถ้า llama-server เปิดอยู่ก่อนแล้ว จะใช้ต่อและไม่ปิด)
+```
+
+ค่าเริ่มต้น **bind ที่ 127.0.0.1** ทั้งสองพอร์ต (เรียกได้จากเครื่องนี้เท่านั้น) — ถ้าจะให้เครื่องอื่นเรียก ตั้ง `DVL_API_HOST=0.0.0.0` และตั้ง `DVL_API_KEY` ด้วย
+กิน VRAM ทั้งการ์ด ~2.5 GB (วัดจริงบน 2060 รวม desktop ~0.3 GB) · ปิดก่อนเทรน/รันงานอื่นที่ใช้ GPU
+
+### Endpoints
+
+| method | path | ทำอะไร |
+|---|---|---|
+| `POST` | `/v1/classify` | multipart field `image` (jpeg/png/webp ≤ 10 MB) → ผลจำแนก |
+| `GET` | `/v1/labels` | `incident_type` ทั้ง 14 ค่าที่โมเดลตอบได้ + `category` + `name_th` (จาก `dvl/catalog.py`) |
+| `GET` | `/health` | 200 เมื่อ llama-server `/health` ok · ไม่งั้น 503 (กำลังโหลดโมเดล/ไม่ได้เปิด) · ไม่ต้องใช้ key |
+
+ภาพที่ส่งมาถูกแปลงด้วย `to_rgb_resized(512)` (หมุนตาม EXIF, RGBA → พื้นขาว, ด้านยาว ≤ 512 แบบเดียวกับตอนสร้าง dataset) → JPEG q95 → llama-server
+คำขอไป llama-server เข้าคิวทีละคำขอ (server เปิด `-np 1`) — ส่งพร้อมกันได้แต่จะรอคิว
+
+### คำตอบ (key คงที่)
+
+```json
+{"category": null, "incident_type": "no_incident", "severity": "none", "confidence": 1.0,
+ "p_incident": 3.32e-06, "needs_review": false, "review_reason": null,
+ "incident_type_name_th": "ไม่ใช่เหตุ", "valid": true, "model": "dvl-qwen3.5-2b-Q4_K_M",
+ "threshold": 3.2e-05, "latency_ms": 818}
+```
+
+| key | ความหมาย |
+|---|---|
+| `category` | หมวดใน SOS catalog (`fire_hazard`, `disaster`, `rescue`, `accident`, `other`) · `null` เมื่อ `no_incident` |
+| `incident_type` | ค่า **หลัง** ใช้กติกา abstain — หนึ่งใน `/v1/labels` (`no_incident` ไม่มีใน SOS = ไม่ต้องสร้างเหตุ) |
+| `severity` | `none` (เฉพาะ no_incident) / `mild` / `severe` |
+| `confidence` | ความน่าจะเป็นของ token ค่า incident_type ที่โมเดลตอบ (0–1 ปัด 3 ตำแหน่ง; 0.0 ถ้าคำตอบพัง) — มั่นใจเกินจริง อย่าใช้แทน `needs_review` |
+| `p_incident` | P(เป็นเหตุ) = 1 − P(category = null) — ค่าที่กติกา abstain ใช้ |
+| `needs_review` | `true` = ต้องให้คนดูก่อนเชื่อผล |
+| `review_reason` | `null` · `uncertain_no_incident` (โมเดลตอบ no_incident แต่ `p_incident ≥ threshold` → เปลี่ยนเป็น `unsure`/`other`/`mild`) · `model_unsure` (โมเดลตอบ `unsure` เอง) · `invalid_output` (คำตอบไม่ใช่ JSON ที่ถูกต้อง → `unsure`, `valid=false`) |
+| `incident_type_name_th` | ชื่อไทยของ `incident_type` |
+| `valid` | คำตอบของโมเดลเป็น JSON ที่ถูกต้องหรือไม่ |
+| `model` / `threshold` | ชื่อโมเดล (`DVL_MODEL_NAME`) / T ที่ใช้ |
+| `latency_ms` | เวลาใน API ทั้งคำขอ (ถอดภาพ + รอคิว + llama-server) — ~450 ms/ภาพบน 2060 |
+
+**`needs_review` คืออะไร:** โมเดลพลาดเหตุจริงโดยตอบ `no_incident` ได้ — กติกา abstain ส่งภาพ no_incident ที่ไม่มั่นใจพอให้คนดูแทน
+(gold: miss 0.045 → 0.018 แลกกับ ~5–10% ของภาพที่ต้องดู) ฝั่ง SOS ควรถือ `needs_review=true` = "อาจเป็นเหตุ ให้เจ้าหน้าที่ยืนยัน" ไม่ใช่ทิ้ง
+
+Error เป็น JSON `{"error": "<code>", "message": "..."}`:
+`400 missing_image / undecodable_image` · `401 unauthorized` · `413 too_large` · `415 unsupported_media_type` (ตรวจทั้ง content-type และเนื้อไฟล์)
+· `502 llama_unreachable / llama_error` · `504 llama_timeout`
+
+### ตัวแปร env
+
+| ตัวแปร | ค่าเริ่มต้น | |
+|---|---|---|
+| `DVL_LLAMA_URL` | `http://127.0.0.1:8091` | llama-server (run.sh ตั้งจาก `DVL_LLAMA_PORT`) |
+| `DVL_ABSTAIN_T` | `3.2e-5` | T ของกติกา abstain — ผูกกับ Q4_K_M + llama.cpp b10909 (โมเดลอื่นต้อง sweep ใหม่) |
+| `DVL_MODEL_NAME` | `dvl-qwen3.5-2b-Q4_K_M` | ชื่อใน `model` (run.sh ใช้ชื่อไฟล์ GGUF) |
+| `DVL_API_KEY` | (ไม่ตั้ง = ปิด) | ถ้าตั้ง ทุก `/v1/*` ต้องมี header `X-API-Key` ไม่งั้น 401 |
+| `DVL_TIMEOUT` | `60` | วินาทีที่รอ llama-server ต่อคำขอ (เกิน → 504) |
+| `DVL_MODEL`, `DVL_MMPROJ` | `models/gguf/…Q4_K_M.gguf`, `…/mmproj-…F16.gguf` | (run.sh) ไฟล์โมเดล |
+| `DVL_LLAMA_BIN` | `../olmocr-lab/bin/llama-b10909` | (run.sh) โฟลเดอร์ llama-server |
+| `DVL_LLAMA_PORT` / `DVL_API_HOST` / `DVL_API_PORT` | `8091` / `127.0.0.1` / `8092` | (run.sh) |
+
+### ตัวอย่าง
+
+```bash
+curl -s http://127.0.0.1:8092/health
+curl -s -H "X-API-Key: $DVL_API_KEY" -F "image=@photo.jpg" http://127.0.0.1:8092/v1/classify
+```
+
+เรียกจาก ASP.NET Core (`HttpClient` จาก `IHttpClientFactory`; timeout ควรมากกว่า `DVL_TIMEOUT` เพราะคำขออาจรอคิว):
+
+```csharp
+using var form = new MultipartFormDataContent();
+var file = new StreamContent(imageStream);
+file.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");   // jpeg/png/webp เท่านั้น
+form.Add(file, "image", "photo.jpg");                               // ชื่อ field ต้องเป็น "image"
+using var req = new HttpRequestMessage(HttpMethod.Post, "http://127.0.0.1:8092/v1/classify") { Content = form };
+req.Headers.Add("X-API-Key", apiKey);                                // ถ้าตั้ง DVL_API_KEY
+using var res = await http.SendAsync(req, ct);
+res.EnsureSuccessStatusCode();
+var result = await res.Content.ReadFromJsonAsync<ClassifyResult>(
+    new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower }, ct);
+// result.NeedsReview → ส่งให้เจ้าหน้าที่ยืนยัน · IncidentType == "no_incident" && !NeedsReview → ไม่ใช่เหตุ
+```
+
+### ตรวจจริงบนเครื่อง (gold 247 ภาพ ผ่าน `api/run.sh`)
+
+| | API (re-encode JPEG q95) | `predict_gguf.py` + กติกา (ส่งไฟล์ดิบ) |
+|---|---|---|
+| incident_type ตรงกัน | 234/247 (94.7%) | – |
+| ตอบถูกตาม gold | 192 | 191 |
+| miss (เหตุจริง → no_incident) | 3/222 | 4/222 |
+| false alarm (no_incident → เหตุ) | 2/25 | 2/25 |
+| ส่งให้คนดู | 14 | 13 |
+
+ต่างกัน 13 ภาพ: 11 ภาพเกิดจากการ encode JPEG ซ้ำ (ส่งไฟล์ดิบเข้า llama-server ตอนนี้ได้ผลเดิมของสคริปต์ ส่งแบบ re-encode ได้ผลเดียวกับ API),
+1 ภาพ p_incident ขยับข้าม T (2.8e-5 → 5.2e-5) จาก re-encode เช่นกัน, 1 ภาพไฟล์ดิบเองตอบต่างจากรอบที่สคริปต์รัน (ไม่ deterministic ข้ามรอบ server)
+— โมเดลไวต่อ artifact ของ JPEG; ลองส่งเป็น PNG (lossless) แทน ตรงกับสคริปต์ 240/247 ถูก 196
+· latency p50 444 ms / p90 490 ms / max 792 ms · VRAM peak 2531 MiB (ทั้งการ์ด)
+
 ## ข้อจำกัด
 
 - **ไม่มีภาพจากไทย** — ภาพทั้งหมดมาจาก dataset ต่างประเทศ (CrisisMMD, DisasterVQA ฯลฯ) ผลบนภาพไทยจริงยังไม่รู้

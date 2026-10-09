@@ -397,6 +397,87 @@ PNG: ต่างจากสคริปต์ 7 ภาพ ทุกภาพ�
 (รอบ JPEG: 11/13 ภาพที่ต่างเกิดจาก encode ซ้ำ ยืนยันโดยส่งไฟล์ดิบ vs re-encode ตรงเข้า llama-server)
 · PNG ช้ากว่า ~60 ms/ภาพ (encode + payload ใหญ่ขึ้น) · VRAM peak 2579 MiB (ทั้งการ์ด)
 
+## Docker
+
+รัน API + llama-server เป็น container (`docker-compose.yml`) — ไม่ต้องมี venv / llama.cpp บนเครื่อง
+มี 2 service หลัก: **`llama`** (image ทางการ `ghcr.io/ggml-org/llama.cpp` เปิด GGUF Q4_K_M + mmproj ด้วย flag เดียวกับ `api/run.sh`)
+และ **`api`** (`docker/Dockerfile.api`: python:3.12-slim + FastAPI/Pillow เท่านั้น ไม่มี torch, รันเป็น user ไม่ใช่ root)
+บวก one-shot **`models`** ที่ดาวน์โหลด GGUF จาก HF ถ้ายังไม่มี
+
+### ต้องมี
+
+- Docker Engine + Compose v2.20 ขึ้นไป (ใช้ `depends_on.required`)
+- profile `cuda`: GPU NVIDIA + **[nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)**
+  (`nvidia-ctk runtime configure --runtime=docker` แล้ว restart docker) — ไม่มีก็ใช้ profile `cpu`
+- ไฟล์ GGUF 2 ไฟล์ใน `models/gguf/` (หรือ `DVL_MODELS_DIR`) — มีแล้ว mount ใช้ได้เลย, ไม่มีให้ service `models` โหลดจาก
+  HF repo private `Petanque/dvl-qwen3.5-2b-gguf` ด้วย `HF_TOKEN` (ตรวจ sha256 ก่อนใช้)
+
+### ตั้งค่า (.env)
+
+```bash
+cp .env.example .env    # .env ถูก gitignore — ห้าม commit
+mkdir -p models/gguf    # ถ้ายังไม่มี (ให้ Docker สร้างเองจะได้โฟลเดอร์ของ root แล้ว service models เขียนไม่ได้)
+```
+
+| ตัวแปร | ค่าเริ่มต้น | |
+|---|---|---|
+| `COMPOSE_PROFILES` | `cpu` | profile ตอนสั่ง `docker compose up` เฉย ๆ (`cpu` / `cuda`) |
+| `HF_TOKEN` | (ว่าง) | ใช้เฉพาะ service `models` ตอนไฟล์ขาด — ส่งเป็น env ตอนรัน ไม่ถูก bake ลง image |
+| `DVL_API_KEY` | (ว่าง = ปิด) | เหมือน `api/run.sh` — **ตั้งเสมอ** ถ้า `DVL_API_BIND` ไม่ใช่ `127.0.0.1` |
+| `DVL_API_BIND` / `DVL_API_PORT` | `127.0.0.1` / `8092` | พอร์ตบน host ของ API (พอร์ตเดียวที่เปิดออกนอก Docker) |
+| `DVL_MODELS_DIR` | `./models/gguf` | โฟลเดอร์ GGUF บน host (llama mount แบบ read-only) |
+| `DVL_UID` / `DVL_GID` | `1000` / `1000` | user ที่ service `models` ใช้เขียนไฟล์ลง `DVL_MODELS_DIR` |
+| `DVL_ABSTAIN_T` / `DVL_TIMEOUT` | `3.2e-5` / `60` | ส่งต่อให้ API (ดูตาราง env ของ HTTP API) |
+
+### เปิดใช้งาน
+
+```bash
+docker compose --profile cpu  up -d --build   # CPU (ไม่ต้องมี GPU)
+docker compose --profile cuda up -d --build   # GPU NVIDIA (-ngl 99)
+docker compose ps                             # รอ llama + api เป็น (healthy) — llama โหลดโมเดลไม่กี่วินาที
+curl -s http://127.0.0.1:8092/health          # {"status":"ok","llama":"ok",...}
+docker compose --profile cpu down             # ปิด (ไฟล์โมเดลอยู่ใน models/gguf ไม่หาย)
+```
+
+ลำดับ: `models` (จบด้วย exit 0 ถ้ามีไฟล์ครบ / โหลดเสร็จ — ไฟล์ขาดและไม่มี token → exit 1 และ llama ไม่เริ่ม)
+→ `llama-cpu` หรือ `llama-cuda` (healthcheck `/health` ของ llama-server, network alias `llama:8080`) → `api` (`DVL_LLAMA_URL=http://llama:8080`, healthcheck `/health` ของ API)
+llama-server ไม่เปิดพอร์ตออก host — เข้าถึงได้จาก network ของ compose เท่านั้น · Bruno (`bruno/`) รันกับ `http://127.0.0.1:8092` ได้เหมือน `api/run.sh`
+
+### ตรวจจริงบนเครื่อง (profile cpu, Ryzen 7 4800H 16 thread)
+
+- `--profile cpu up -d --build` → healthy ทั้งคู่ · `/health` 200, `/v1/labels` 14 ค่า · Bruno: 9 ผ่าน + 2 skip (06 ไม่มี key, 08 เสมอ) / 23 tests ผ่าน
+- latency ต่อภาพ **~3–5 s บน CPU** (GPU Vulkan ~0.5 s) — ผล fixtures ตรงกับ GPU: flood/building_fire ถูก, ภาพ no_incident `p_incident` 4.0e-6 (GPU 4.8e-6) ไม่ส่งคนดู,
+  ภาพโปสเตอร์พายุ `p_incident` 1.4e-4 (GPU 1.2e-4) → gate ทำงานเป็น `unsure`
+- profile `cuda` ตรวจแค่ `docker compose --profile cuda config` (เครื่องนี้ไม่มี nvidia-container-toolkit) — ยังไม่ได้รันจริง
+- image `api` ~233 MB (import แค่ `dvl.{catalog,confidence,imgutil,llamacpp,prompt,schema}` ไม่มี torch/numpy)
+
+### ข้อควรระวัง: threshold ผูกกับ build
+
+`DVL_ABSTAIN_T = 3.2e-5` tune บน val ด้วย **Q4_K_M + llama.cpp b10909 (Vulkan)** แต่ไม่มี image Docker ของ b10909 —
+compose pin **`server-b10902` / `server-cuda-b10902`** (build ที่ใกล้ที่สุด; ตรวจด้วย `llama-server --version` → `build 10902, commit df03399b8`)
+และ backend ต่างกัน (CPU / CUDA vs Vulkan) ทำให้ logprob ระดับ 1e-5 ขยับได้ → อัตราที่ gate ส่งให้คนดูอาจต่างจากตัวเลขใน README เล็กน้อย
+ถ้าจะใช้จริงด้วย profile ไหน ให้ sweep T ใหม่กับ server ตัวนั้น (`scripts/abstain_sweep.py` ชี้ไปที่ llama-server ใน container) แล้วตั้ง `DVL_ABSTAIN_T` ·
+เปลี่ยน tag ของ image หรือ quant ก็ต้อง sweep ใหม่เช่นกัน
+
+### ให้ SOS backend เรียก
+
+- SOS รันบน host เดียวกัน (ไม่ใช่ container): `http://127.0.0.1:8092`
+- SOS รันใน Docker: ต่อ container ของ SOS เข้า network ของ compose นี้ (`disaster-vlm-lab_default`) แล้วเรียก **`http://api:8092`**
+  (ไม่ต้องเปิดพอร์ตออก host) เช่นใน compose ของ SOS:
+
+  ```yaml
+  services:
+    backend:
+      networks: [default, dvl]
+  networks:
+    dvl:
+      name: disaster-vlm-lab_default
+      external: true
+  ```
+
+- SOS อยู่คนละเครื่อง: ตั้ง `DVL_API_BIND=0.0.0.0` **และ** `DVL_API_KEY` (ส่ง header `X-API-Key`) — ควรมี reverse proxy/TLS ข้างหน้า
+- CPU ช้ากว่า GPU ~10 เท่า: ตั้ง `HttpClient.Timeout` ของ SOS ให้เผื่อคิว (คำขอละหลายวินาที × จำนวนที่รอ)
+
 ## ข้อจำกัด
 
 - **ไม่มีภาพจากไทย** — ภาพทั้งหมดมาจาก dataset ต่างประเทศ (CrisisMMD, DisasterVQA ฯลฯ) ผลบนภาพไทยจริงยังไม่รู้

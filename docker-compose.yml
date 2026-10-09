@@ -1,0 +1,105 @@
+# disaster-vlm-lab — HTTP API (api/app.py) + llama-server (llama.cpp) ใน Docker · ดู README "Docker"
+#   docker compose --profile cpu  up -d --build    # llama.cpp CPU (ไม่ต้องมี GPU, ช้ากว่า)
+#   docker compose --profile cuda up -d --build    # llama.cpp CUDA (ต้องมี nvidia-container-toolkit)
+# (หรือตั้ง COMPOSE_PROFILES=cpu|cuda ใน .env แล้วสั่ง docker compose up -d --build)
+#
+# เปิดพอร์ตออกนอก container แค่ API (${DVL_API_BIND}:${DVL_API_PORT} → 8092) · llama-server อยู่ใน network ภายในเท่านั้น
+# โมเดล: โฟลเดอร์ ${DVL_MODELS_DIR:-./models/gguf} บนเครื่อง — service `models` ดาวน์โหลดไฟล์ที่ขาดจาก HF (ต้องมี HF_TOKEN)
+#
+# llama.cpp image pin ที่ b10902: ไม่มี image ของ b10909 (build ที่ใช้ tune DVL_ABSTAIN_T บน Vulkan) — b10902 ใกล้ที่สุด
+# ดูข้อควรระวังเรื่อง threshold ใน README
+
+x-llama: &llama
+  # ไฟล์โมเดล mount แบบอ่านอย่างเดียว · flag เดียวกับ api/run.sh (-ngl 99 ใส่เฉพาะ cuda ผ่าน env)
+  volumes:
+    - ${DVL_MODELS_DIR:-./models/gguf}:/models:ro
+  depends_on:
+    models:
+      condition: service_completed_successfully
+  networks:
+    default:
+      aliases: [llama]
+  healthcheck:
+    test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/health"]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+    start_period: 120s
+  restart: unless-stopped
+
+x-llama-args: &llama-args
+  - -m
+  - /models/dvl-qwen3.5-2b-Q4_K_M.gguf
+  - --mmproj
+  - /models/mmproj-dvl-qwen3.5-2b-F16.gguf
+  - -c
+  - "4096"
+  - -np
+  - "1"
+  - --jinja
+  - --reasoning
+  - "off"
+  - --host
+  - 0.0.0.0
+  - --port
+  - "8080"
+
+services:
+  models:
+    # one-shot: มีไฟล์ครบแล้ว → จบทันที (ไม่ต้องใช้ token) · ขาด → ดาวน์โหลดจาก HF ด้วย HF_TOKEN (ไม่ฝังลง image)
+    image: python:3.12-slim
+    profiles: [cpu, cuda]
+    user: "${DVL_UID:-1000}:${DVL_GID:-1000}"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      DVL_MODELS_DIR: /models
+    volumes:
+      - ${DVL_MODELS_DIR:-./models/gguf}:/models
+      - ./docker/fetch_models.py:/fetch_models.py:ro
+    command: ["python", "/fetch_models.py", "/models"]
+    restart: "no"
+
+  llama-cpu:
+    <<: *llama
+    image: ghcr.io/ggml-org/llama.cpp:server-b10902
+    profiles: [cpu]
+    command: *llama-args
+
+  llama-cuda:
+    <<: *llama
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda-b10902
+    profiles: [cuda]
+    command: *llama-args
+    environment:
+      LLAMA_ARG_N_GPU_LAYERS: "99"   # = -ngl 99 (ทุก layer บน GPU)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    image: disaster-vlm-lab-api:local
+    profiles: [cpu, cuda]
+    depends_on:
+      # มีแค่ตัวเดียวที่ทำงานตาม profile — อีกตัวถูกข้าม (required: false)
+      llama-cpu:
+        condition: service_healthy
+        required: false
+      llama-cuda:
+        condition: service_healthy
+        required: false
+    environment:
+      DVL_LLAMA_URL: http://llama:8080
+      DVL_MODEL_NAME: dvl-qwen3.5-2b-Q4_K_M
+      DVL_API_KEY: ${DVL_API_KEY:-}
+      DVL_ABSTAIN_T: ${DVL_ABSTAIN_T:-3.2e-5}
+      DVL_TIMEOUT: ${DVL_TIMEOUT:-60}
+    ports:
+      - "${DVL_API_BIND:-127.0.0.1}:${DVL_API_PORT:-8092}:8092"
+    restart: unless-stopped

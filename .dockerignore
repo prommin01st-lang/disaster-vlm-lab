@@ -1,0 +1,18 @@
+# build context ของ docker/Dockerfile.api ต้องการแค่ api/ และ dvl/
+.git
+.env
+.env.*
+data/
+runs/
+models/
+.superpowers/
+colab/
+reports/
+scripts/
+tests/
+bruno/
+**/__pycache__
+**/*.pyc
+.pytest_cache/
+*.tar
+*.tar.gz

@@ -7,3 +7,8 @@ __pycache__/
 .superpowers/
 models/
 .env
+# ภาพ fixture จาก dataset (ลิขสิทธิ์ของเจ้าของภาพ) — ไม่แจก · สร้างด้วย python bruno/fetch_fixtures.py
+bruno/fixtures/flood.jpg
+bruno/fixtures/building-fire.jpg
+bruno/fixtures/no-incident.jpg
+bruno/fixtures/uncertain-no-incident.jpg

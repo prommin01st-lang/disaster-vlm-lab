@@ -14,6 +14,11 @@ body:multipart-form {
   image: @file(fixtures/flood.jpg)
 }
 
+script:pre-request {
+  // ภาพจาก dataset ไม่แจกใน repo — skip ถ้ายังไม่ได้ดึง (python bruno/fetch_fixtures.py · ดู docs ของ collection หัวข้อ Fixtures)
+  require("./lib/fixtures.js").skipUnlessFixture(bru, "flood.jpg");
+}
+
 tests {
   test("Status is 200", function() {
     expect(res.status).to.equal(200);
@@ -238,6 +243,7 @@ docs {
 
   ## Testing Notes
   - fixture `fixtures/flood.jpg` = test_gold `e374542ee5ccab03` — ทดสอบแบบเจาะจง `flood` (โมเดลตอบ confidence 1.0 ทุกรอบที่ลอง)
+  - `fixtures/flood.jpg` / `building-fire.jpg` ไม่อยู่ใน repo — ดึงด้วย `python bruno/fetch_fixtures.py` (ไม่มีไฟล์ → request นี้ skip)
   - example `Building Fire` ใช้ `fixtures/building-fire.jpg` (test_gold `05567df96c3e618d`) — เปลี่ยน path ใน body เพื่อลองเอง
   - `latency_ms` ใน example เป็นค่าตอน warm · คำขอแรกหลังเปิด server วัดได้ 928 ms
 }

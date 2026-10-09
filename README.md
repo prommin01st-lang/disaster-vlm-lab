@@ -371,9 +371,12 @@ var result = await res.Content.ReadFromJsonAsync<ClassifyResult>(
 ### Bruno collection
 
 `bruno/` — เอกสาร contract ของทุก endpoint (docs ภาษาไทย + ตัวอย่าง request/response จริงทุก status) และชุดเทสที่รันได้
-(fixtures เป็นภาพจริงจาก test_gold รวมภาพที่ทำให้กติกา abstain ทำงาน):
+(fixtures ของ 01–03 เป็นภาพจริงจาก test_gold รวมภาพที่ทำให้กติกา abstain ทำงาน — **ไม่แจกใน repo** (ลิขสิทธิ์ของเจ้าของภาพ)
+ดึงด้วย `bruno/fetch_fixtures.py` จาก HF dataset private หรือ dataset บนเครื่อง; ยังไม่ดึง → 01–03 skip):
 
 ```bash
+HF_TOKEN=hf_... python bruno/fetch_fixtures.py               # ครั้งแรก: stream dataset_v1.tar แตกเฉพาะ 4 ภาพ
+python bruno/fetch_fixtures.py --from-local data/dataset_v1  # หรือจาก dataset บนเครื่อง
 cd bruno
 bru run --env Local                              # API เปิดแบบไม่มี key (06-Wrong API Key ถูก skip)
 bru run --env Local --env-var apiKey=secret123   # API เปิดด้วย DVL_API_KEY=secret123

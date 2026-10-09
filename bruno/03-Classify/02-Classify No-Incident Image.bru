@@ -14,6 +14,11 @@ body:multipart-form {
   image: @file(fixtures/no-incident.jpg)
 }
 
+script:pre-request {
+  // ภาพจาก dataset ไม่แจกใน repo — skip ถ้ายังไม่ได้ดึง (python bruno/fetch_fixtures.py · ดู docs ของ collection หัวข้อ Fixtures)
+  require("./lib/fixtures.js").skipUnlessFixture(bru, "no-incident.jpg");
+}
+
 tests {
   test("Status is 200", function() {
     expect(res.status).to.equal(200);

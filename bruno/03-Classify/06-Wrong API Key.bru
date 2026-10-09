@@ -11,7 +11,7 @@ post {
 }
 
 body:multipart-form {
-  image: @file(fixtures/flood.jpg)
+  image: @file(fixtures/not-an-image.jpg)
 }
 
 script:pre-request {
@@ -48,7 +48,7 @@ example {
       X-API-Key: wrong-secret123
     }
     body:multipart-form: {
-      image: @file(fixtures/flood.jpg)
+      image: @file(fixtures/not-an-image.jpg)
     }
   }
 
@@ -81,7 +81,7 @@ example {
     method: post
     mode: multipartForm
     body:multipart-form: {
-      image: @file(fixtures/flood.jpg)
+      image: @file(fixtures/not-an-image.jpg)
     }
   }
 
@@ -124,7 +124,7 @@ docs {
   |--------|-------|-------------|
   | X-API-Key | `wrong-{{apiKey}}` | pre-request ตั้งทับ header ที่ collection ใส่ให้ |
 
-  body: field `image` = `fixtures/flood.jpg`
+  body: field `image` = `fixtures/not-an-image.jpg` (key ถูกตรวจก่อนถอดภาพ — ไม่ต้องใช้ภาพจริง)
 
   ## Response
 

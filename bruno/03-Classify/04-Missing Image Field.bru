@@ -11,7 +11,7 @@ post {
 }
 
 body:multipart-form {
-  file: @file(fixtures/flood.jpg)
+  file: @file(fixtures/not-an-image.jpg)
 }
 
 tests {
@@ -35,7 +35,7 @@ example {
     method: post
     mode: multipartForm
     body:multipart-form: {
-      file: @file(fixtures/flood.jpg)
+      file: @file(fixtures/not-an-image.jpg)
     }
   }
 
@@ -74,7 +74,7 @@ docs {
   ```
   | Field | Type | Description |
   |-------|------|-------------|
-  | `file` | file | `fixtures/flood.jpg` — ชื่อ field ผิดโดยตั้งใจ |
+  | `file` | file | `fixtures/not-an-image.jpg` — ชื่อ field ผิดโดยตั้งใจ (เนื้อไฟล์ไม่สำคัญ) |
 
   ## Response
 

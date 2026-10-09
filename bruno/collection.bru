@@ -60,6 +60,7 @@ docs {
   - `03-Classify/06-Wrong API Key` ถูก **skip** เมื่อไม่ได้ตั้ง `apiKey` (server ที่ไม่มี key ไม่มีทางตอบ 401)
   - `03-Classify/08-Too Large` ถูก **skip เสมอ** — ต้องใช้ไฟล์ > 10 MB ซึ่งไม่ commit ไว้ใน repo (ตัวอย่าง response ในไฟล์เป็นของจริงจาก curl)
   - `01-Health` 503 ดูได้จาก example เท่านั้น (ต้องปิด llama-server)
+  - `03-Classify/01`–`03` ถูก **skip** จนกว่าจะดึงภาพ fixture (ภาพจาก dataset ไม่แจกใน repo — ดูหัวข้อ Fixtures)
 
   ## needs_review และกติกา abstain
 
@@ -113,15 +114,29 @@ docs {
 
   ## Fixtures (`fixtures/`)
 
-  | ไฟล์ | ที่มา | ใช้ใน |
-  |---|---|---|
-  | `flood.jpg` | test_gold `e374542ee5ccab03` (flood, CrisisMMD) | 01-Classify Incident Image |
-  | `building-fire.jpg` | test_gold `05567df96c3e618d` (building_fire, CrisisMMD) | example ของ 01 |
-  | `no-incident.jpg` | test_gold `fb4fa14ff082ee2f` (no_incident, CrisisMMD) | 02-Classify No-Incident Image |
-  | `uncertain-no-incident.jpg` | test_gold `fd5a1ada5004c085` (label storm — โปสเตอร์ Hurricane Harvey) | 03-Classify Uncertain No-Incident |
-  | `not-an-image.jpg` | ข้อความล้วน 37 byte | 05-Undecodable Image |
-  | `sample.gif` | GIF 8×8 | 09-Unsupported Media Type |
-  | `bomb-20000x20000.png` | PNG 89 byte ที่ header ประกาศ 20000×20000 (1-bit) | 07-Too Many Pixels |
+  | ไฟล์ | ที่มา | ใช้ใน | อยู่ใน repo |
+  |---|---|---|---|
+  | `flood.jpg` | test_gold `e374542ee5ccab03` (flood, CrisisMMD) | 01-Classify Incident Image | ❌ ดึงเอง |
+  | `building-fire.jpg` | test_gold `05567df96c3e618d` (building_fire, CrisisMMD) | example ของ 01 | ❌ ดึงเอง |
+  | `no-incident.jpg` | test_gold `fb4fa14ff082ee2f` (no_incident, Flickr) | 02-Classify No-Incident Image | ❌ ดึงเอง |
+  | `uncertain-no-incident.jpg` | test_gold `fd5a1ada5004c085` (label storm — โปสเตอร์ Hurricane Harvey, CrisisMMD) | 03-Classify Uncertain No-Incident | ❌ ดึงเอง |
+  | `not-an-image.jpg` | ข้อความล้วน 37 byte | 04-Missing Image Field, 05-Undecodable Image, 06-Wrong API Key, body ของ 08 | ✅ |
+  | `sample.gif` | GIF 8×8 | 09-Unsupported Media Type | ✅ |
+  | `bomb-20000x20000.png` | PNG 89 byte ที่ header ประกาศ 20000×20000 (1-bit) | 07-Too Many Pixels | ✅ |
 
-  ภาพจาก dataset ต้นทางที่เป็นไลเซนส์ non-commercial — ใช้เพื่อการเรียน/ทดสอบเท่านั้น
+  ### ภาพจาก dataset ไม่แจกใน repo
+
+  4 ภาพแรกเป็นภาพจริงจาก dataset (ภาพจาก tweet/Flickr — **ลิขสิทธิ์ของเจ้าของภาพ**) จึงไม่ commit (อยู่ใน `.gitignore`)
+  ดึงมาจาก HF dataset private `Petanque/dvl-data` หรือจาก dataset บนเครื่อง — สคริปต์ตรวจ sha256 ว่าได้ภาพเดียวกับที่ใช้ทำ example:
+
+  ```bash
+  cd disaster-vlm-lab
+  HF_TOKEN=hf_... python bruno/fetch_fixtures.py                 # stream dataset_v1.tar (~600 MB) แตกเฉพาะ 4 ภาพ ไม่เก็บ tar
+  python bruno/fetch_fixtures.py --from-local data/dataset_v1    # มี dataset บนเครื่องแล้ว
+  ```
+
+  - ยังไม่ดึง → `01`–`03` **skip** (`bru run` ยังผ่าน) · ดึงแล้ว → รันครบ
+  - วิธีรู้ว่ามีไฟล์: sandbox ค่าเริ่มต้น (safe) อ่านไฟล์ไม่ได้ สคริปต์จึงเขียน `bruno/.env` (gitignored) → `DVL_FIXTURES=<ไฟล์ที่มี>` ให้ `lib/fixtures.js` อ่าน
+    · รันด้วย `--sandbox developer` จะตรวจไฟล์จริงด้วย `fs` แทน · ลบภาพทิ้งเองแล้วให้รัน `fetch_fixtures.py` ซ้ำเพื่ออัปเดต `.env`
+  - dataset ต้นทางบางชุดเป็นไลเซนส์ non-commercial — ใช้เพื่อการเรียน/ทดสอบเท่านั้น
 }

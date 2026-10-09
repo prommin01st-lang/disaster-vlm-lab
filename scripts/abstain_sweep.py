@@ -5,8 +5,9 @@ P(เป็นเหตุ) = 1 − P(category = null) จาก category_alts (
 ใช้: python scripts/abstain_sweep.py --tune GOLD.jsonl PRED.jsonl [--target-miss 0.01]
                                    [--check GOLD.jsonl PRED.jsonl [--exclude GOLD.jsonl]] ...
 --exclude ตัดแถวที่มี id อยู่ในไฟล์นั้นออกจากทุกชุด ยกเว้นชุดที่เป็นไฟล์นั้นเอง (เช่น test ลบ test_gold)"""
-import argparse, json, math
+import argparse, json
 
+from dvl.llamacpp import abstain
 from dvl.metrics import compute_metrics
 
 GRID = [10 ** (-k / 4) for k in range(0, 33)]  # 1 … 1e-8 แบบ log
@@ -14,17 +15,6 @@ GRID = [10 ** (-k / 4) for k in range(0, 33)]  # 1 … 1e-8 แบบ log
 
 def load(path: str) -> dict:
     return {json.loads(l)["id"]: json.loads(l) for l in open(path, encoding="utf-8")}
-
-
-def p_incident(p: dict) -> float:
-    p_null = sum(math.exp(lp) for tok, lp in p["category_alts"] if tok.strip() == "null")
-    return max(0.0, 1.0 - p_null)
-
-
-def abstain(p: dict, t: float) -> dict:
-    if t is not None and p["incident_type"] == "no_incident" and p_incident(p) >= t:
-        return {**p, "category": "other", "incident_type": "unsure", "severity": "mild"}
-    return p
 
 
 def score(gold: dict, pred: dict, t: float) -> dict:
